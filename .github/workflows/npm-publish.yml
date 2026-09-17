@@ -32,9 +32,10 @@ jobs:
       - run: npm test
 
       - name: Publish
+        # Trusted publishing (OIDC): no NPM_TOKEN needed. Configure once at
+        # npmjs.com → package Settings → Trusted Publisher → GitHub Actions
+        # (org fiale-plus, repo jev-cli, workflow npm-publish.yml).
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Verify publication
         run: |
