@@ -3,6 +3,19 @@ import { estimateCostUsd } from "../api/client.js";
 
 export type OutputFormat = "json" | "table";
 
+export interface JsonError {
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+}
+
+export function formatJsonError(code: string, message: string, details?: unknown): string {
+  const payload: JsonError = { error: { code, message, ...(details !== undefined ? { details } : {}) } };
+  return JSON.stringify(payload);
+}
+
 function formatNumber(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : String(value);
 }
@@ -15,13 +28,14 @@ export function formatOutput(response: SystemOneResult<Questions>, format: Outpu
         input_tokens: response.usage.input_tokens,
         output_tokens: response.usage.output_tokens,
         estimated_usd: estimateCostUsd(response.usage.input_tokens),
-        note: "input billed, output free",
+        note: "display-only estimate: input billed, output free",
       },
     };
     return JSON.stringify(enriched, null, 2);
   }
   return formatTable(response);
 }
+
 function formatTable(response: SystemOneResult<Questions>): string {
   const lines: string[] = [`model: ${response.model}`];
   const answers = response.answers as unknown as Record<string, { type: string } & Record<string, unknown>>;

@@ -32,8 +32,8 @@ describe("CLI integration (offline)", () => {
   });
 
   it("shows help with no args", async () => {
-    const { stdout } = await run([]);
-    assert.ok(stdout.includes("jev-cli"));
+    const { stderr } = await run([]);
+    assert.ok(stderr.includes("jev-cli"));
   });
 
   it("shows version with --version", async () => {
