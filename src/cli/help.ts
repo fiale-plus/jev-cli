@@ -90,17 +90,19 @@ NOTES
 export const BATCH_HELP = `jev batch — Many independent requests from a JSONL file
 
 USAGE
-  jev batch --request <file.jsonl> [--questions <file>] [--concurrency <n>]
+  jev batch --request <file.jsonl> [--concurrency <n>]
+  jev batch --state-file <file.jsonl> --questions <file> [--model <id>] [--concurrency <n>]
 
 INPUT (one JSON object per line)
   {"id": "row-1", "state": ..., "questions": {...}, "model": "jev-1.13.0"}
-  questions/model may be omitted per record when --questions/--model covers them.
+  With --request, every record carries its own questions/model. With
+  --state-file, records carry state (+id) and share --questions/--model.
 
 CONTRACT
   One result/error record per input record, input order preserved, streamed to
-  stdout as JSON lines: {"id","ok","response"|"error"}. Overall exit is 1 when
-  any record fails. No re-execution of successful records — callers filter and
-  retry the failures themselves.
+  stdout as JSON lines: {"index","id","ok","response"|"error"}. Overall exit is
+  1 when any record fails. No re-execution of successful records — callers
+  filter and retry the failures themselves.
 `;
 
 export const MODELS_HELP = `jev models — List models available to your key

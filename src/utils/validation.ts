@@ -15,10 +15,6 @@ function parseNumber(value: string | undefined, name: string, min: number, max: 
   return n;
 }
 
-export function parseProbability(value: string | undefined, name: string, fallback: number): number {
-  return parseNumber(value, name, 0, 1, fallback);
-}
-
 export function parsePositiveInt(value: string | undefined, name: string, fallback: number, max = 1_000_000): number {
   const n = parseNumber(value, name, 0, max, fallback);
   if (!Number.isInteger(n)) throw new Error(`Invalid ${name}: "${value}". Expected an integer.`);

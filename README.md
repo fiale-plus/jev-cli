@@ -74,18 +74,16 @@ Many independent requests from a JSONL file, bounded concurrency, one result rec
 
 ```bash
 jev batch --request requests.jsonl --concurrency 8
-jev batch --request states.jsonl --questions pack.json
+jev batch --state-file states.jsonl --questions pack.json
 ```
 
-Input records: `{"id": "row-1", "state": ..., "questions": {...}, "model": "jev-1.13.0"}`. Per-record `questions`/`model` may be omitted when `--questions`/`--model` covers them. Output is JSON lines: `{"id","ok","response"|"error"}`. Overall exit is 1 when any record fails — filter and retry failures in the caller.
+Input records: `{"id": "row-1", "state": ..., "questions": {...}, "model": "jev-1.13.0"}`. With `--request`, every record carries its own questions/model; with `--state-file <jsonl> --questions pack.json [--model ...]`, records carry state (+id) and share them. Output is JSON lines: `{"index","id","ok","response"|"error"}`. Overall exit is 1 when any record fails — filter and retry failures in the caller.
 
 ### Models
 
 ```bash
 jev models
 ```
-
-Pin `--model jev-1.13.0` (not the `jev-latest` alias) once thresholds are tuned — aliases drift, the response `model` field reports the versioned ID that answered.
 
 ### Exit codes (execution status)
 

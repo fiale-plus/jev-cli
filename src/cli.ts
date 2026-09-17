@@ -3,18 +3,20 @@
 import { APIError, TypeSafeError } from "@typesafe-ai/sdk";
 import { parseGlobal, extractGlobalOpts } from "./cli/parseArgs.js";
 import type { OutputFormat } from "./cli/formatters.js";
+import { formatJsonError } from "./cli/formatters.js";
 import { ASK_HELP, BATCH_HELP, MAIN_HELP, MODELS_HELP } from "./cli/help.js";
 import { resolveApiKey } from "./utils/validation.js";
 import { handleBatch, handleLint, handleModels } from "./commands/ops.js";
 import { clientOpts, handleAsk, handleChoice, handleNoul, handleScore } from "./commands/requests.js";
 
-const VERSION = "0.0.0-dev";
+const VERSION = "0.1.0";
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
   if (argv.length === 0) {
-    process.stdout.write(MAIN_HELP);
+    process.stderr.write(MAIN_HELP);
+    process.exitCode = 1;
     return;
   }
 
@@ -24,10 +26,9 @@ async function main(): Promise<void> {
 
   if (global.help) {
     const [command] = parsed.positionals as string[];
-    if (command === "ask") process.stdout.write(ASK_HELP);
-    else if (command === "batch") process.stdout.write(BATCH_HELP);
-    else if (command === "models") process.stdout.write(MODELS_HELP);
-    else process.stdout.write(MAIN_HELP);
+    const text = command === "ask" ? ASK_HELP : command === "batch" ? BATCH_HELP : command === "models" ? MODELS_HELP : MAIN_HELP;
+    // --help goes to stdout (it IS the output); unknown commands go to stderr.
+    process.stdout.write(text);
     return;
   }
 
@@ -66,8 +67,7 @@ async function main(): Promise<void> {
     }
 
     default:
-      process.stderr.write(`Unknown command: ${group}\n\n`);
-      process.stdout.write(MAIN_HELP);
+      process.stderr.write(`Unknown command: ${group}\n\n${MAIN_HELP}`);
       process.exitCode = 1;
       return;
   }
@@ -76,15 +76,25 @@ async function main(): Promise<void> {
 main().catch((err) => {
   // Exit codes are execution status: 1 for usage/transport/API errors.
   // Successful inference always exits 0 — confidence is data for the caller.
+  // JSON errors go to stderr in every format; stdout stays machine-parseable.
+  let code = "ERROR";
+  let message: string;
+  let details: unknown;
   if (err instanceof APIError) {
-    process.stderr.write(`Error: TypeSafe API error ${err.status}: ${err.message}\n`);
-    if (err.requestId) process.stderr.write(`request-id: ${err.requestId}\n`);
+    code = `API_${err.status}`;
+    message = `TypeSafe API error ${err.status}: ${err.message}`;
+    details = err.requestId ? { requestId: err.requestId } : undefined;
   } else if (err instanceof TypeSafeError) {
-    process.stderr.write(`Error: ${err.message}\n`);
+    code = "CLIENT_ERROR";
+    message = err.message;
   } else if (err instanceof Error) {
-    process.stderr.write(`Error: ${err.message}\n`);
+    if (err.message.includes("Invalid ") || err.message.includes("Missing ") || err.message.includes("Conflicting ") || err.message.includes("Unknown ")) {
+      code = "USAGE_ERROR";
+    }
+    message = err.message;
   } else {
-    process.stderr.write(`Error: ${String(err)}\n`);
+    message = String(err);
   }
+  process.stderr.write(formatJsonError(code, message, details) + "\n");
   process.exitCode = 1;
 });
