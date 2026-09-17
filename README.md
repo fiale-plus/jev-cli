@@ -18,7 +18,7 @@ Transport, retries, and types come from the official [`@typesafe-ai/sdk`](https:
 - **Structured state** — `--state-format json` preserves objects/arrays end to end
 - **Cost visibility** — every JSON response carries `usage` + `cost.estimated_usd` (input billed at $42/Btok, output free)
 
-Policy lives in the caller. A successful inference exits 0 even when answers are uncertain — probabilities and confidence are data on stdout, not authorization.
+Policy lives in the caller. A successful inference exits 0 even when answers are uncertain — probabilities and confidence are data on stdout, not authorization. `jev gate` runs that policy **offline** over a saved judgment, which is where accept/review/deny/abstain exit codes come from.
 
 ## Quick Start
 
@@ -33,6 +33,30 @@ jev models
 Get a key at: https://console.typesafe.ai/settings/keys
 
 Requires Node.js >= 22.0.0.
+
+## The decision pipeline
+
+Inference and policy are separate steps, so a judgment is reproducible and auditable:
+
+```bash
+# 1. Judge — questions from a bundled pack, state from you, record for the audit trail
+jev ask --pack verify --state-file claim.json --state-format json --record decisions/claim-1.json
+
+# 2. Decide — offline, no API call, exit code is the decision
+jev gate --input decisions/claim-1.json --pack verify; echo "exit $?"    # 0 2 3 4
+
+# 3. Show your work — re-emit the stored answers without paying again
+jev replay --record decisions/claim-1.json
+```
+
+| `jev gate` exit | Decision | Caller action |
+|---|---|---|
+| 0 | `accept` | proceed |
+| 2 | `review` | escalate to a human or a stronger check |
+| 3 | `deny` | refuse |
+| 4 | `abstain` | not enough information — never treated as acceptance |
+
+`deny` and `abstain` are separate codes because remediation differs: one is a verdict, the other is a missing input. Every rule's reason is printed in both formats, so the answer to "why did this pass?" is on stdout.
 
 ## CLI Usage
 
@@ -82,6 +106,119 @@ jev batch --state-file states.jsonl --questions pack.json
 
 Input records: `{"id": "row-1", "state": ..., "questions": {...}, "model": "jev-1.13.0"}`. With `--request`, every record carries its own questions/model; with `--state-file <jsonl> --questions pack.json [--model ...]`, records carry state (+id) and share them. Output is JSON lines: `{"index","id","ok","response"|"error"}`. Overall exit is 1 when any record fails — filter and retry failures in the caller.
 
+### Packs
+
+A pack is a versioned question set plus the policy that decides when its answers permit proceeding:
+
+```bash
+jev packs                    # list bundled packs with their content hash
+jev packs verify             # dump one pack's questions, policy, and hash
+jev lint  --pack verify      # validate it
+jev ask   --pack verify --state-file claim.json --state-format json
+jev gate  --input judgment.json --pack verify
+```
+
+| Pack | Questions | Answers |
+|---|---|---|
+| `verify` | claim + cited evidence | `supports` / `contradicts` / `says_nothing` |
+| `screen` | untrusted content | injection, harmful content, severity (plus substance and relevance for the caller) |
+| `route` | incoming request | `deterministic` / `specialist` / `human` / `none`, plus complexity |
+
+`screen` is advisory: it is a judgment layer, not a security boundary — keep it behind real sandboxing, not instead of it. Ranking candidates is not a pack because its options are dynamic: build the `--option` flags per call (see `examples/README.md`).
+
+Each pack carries a state contract in its `state_contract` field, describing the fields its questions expect. Pack questions and policy are hashed together; `gate` prints the hash, and a record captures the hash it ran under, so a decision names the exact revision it used.
+
+### Gate policies
+
+`--policy <file>` applies your own thresholds instead of a pack's:
+
+```json
+{
+  "policy_version": 1,
+  "name": "verify-strict",
+  "mode": "all",
+  "rules": [
+    { "answer": "relation", "type": "choice", "accept": ["supports"], "accept_at": 0.95, "review_at": 0.75 },
+    { "answer": "injection", "type": "noul", "accept_when": "no", "accept_at": 0.9, "review_at": 0.7 },
+    { "answer": "severity", "type": "score", "higher_is_worse": true, "accept_at": 0.5, "review_at": 1.5 }
+  ]
+}
+```
+
+- Every rule names one answer and the condition that permits proceeding.
+- A choice label outside `accept` never accepts, however confident the model is; what can soften a denial into `review` is probability mass sitting on an accepted label.
+- A choice answer must carry a probability map whose values sit in `[0, 1]` and sum to 1 (tolerance 0.05). A map that is missing, off-label, or unnormalized **abstains**: confidence is a number about the whole answer, and substituting it for a per-label probability would let a malformed answer pass a threshold.
+- A score must fall inside its scale — the rule's `range`, or the level indices the answer reports in `legend`/`probabilities`. A score outside that scale abstains, so `severity: -100` cannot glide past `accept_at: 0.5`.
+- A missing or wrong-typed answer abstains — it never accepts. Mark a rule `"optional": true` to skip it when absent.
+- `mode: "all"` (default) takes the worst outcome in the order `deny > abstain > review > accept`; `mode: "any"` is the reverse.
+
+Rules are validated on load: `review_at` above `accept_at`, a choice rule with no accepted label or a repeated one, an out-of-order `range`, or an unknown type fails loudly instead of silently never firing.
+
+### Pack identity
+
+Gating a record against the pack that produced it is checked in two parts, because the two kinds of change mean different things:
+
+| Change since the record was written | Result |
+|---|---|
+| questions changed | exit 1 — stored answers no longer mean what the current rules assume; re-run the request, or gate with `--policy <file>` if re-deciding is genuinely intended |
+| thresholds changed only | the current policy applies, with a warning on stderr |
+| identical | no note |
+
+Both the pack hash and that comparison are printed in `json` and `table` output, so an accepted decision never looks unqualified.
+
+### Records and replay
+
+`--record <path>` writes a decision record next to a normal response (noul/choice/score/ask):
+
+```json
+{
+  "record_version": 1,
+  "created_at": "2026-09-18T10:00:00.000Z",
+  "cli_version": "0.1.2",
+  "model_requested": "jev-1.13.0",
+  "model_resolved": "jev-1.13.0",
+  "state_sha256": "sha256:...",
+  "questions_sha256": "sha256:...",
+  "latency_ms": 412,
+  "pack": { "name": "verify", "pack_version": 1, "hash": "sha256:..." },
+  "response": { "model": "...", "answers": { "...": {} }, "usage": { "...": "..." } }
+}
+```
+
+The state is **hashed, not stored**: a record can live beside a log without carrying the confidential text that produced the decision, while still committing to the exact input the CLI sent. The hash is type-tagged and versioned, so a text state cannot collide with the JSON state that parses to the same bytes. It is an unsigned commitment, not proof of what the model read: only the response, returned by the API under TLS, attests to that.
+
+`jev replay --record <file>` prints those stored answers again with `"replayed": true` — no API call, for re-running downstream policy or comparing a stored decision against a fresh one. Replay is not a rerun: an answer is reproducible only while the model version stays pinned, which is why `model_resolved` is recorded. `<path>` is created along with any missing parent directories, before the request is sent, so a bad path cannot fail after you have paid for an answer.
+
+### Doctor
+
+```bash
+jev doctor            # engine, key presence, base URL, model, packs — no API call
+jev doctor --live     # also authenticate, list models, and time a probe
+```
+
+The key is reported by presence and source, never by value. Exit is 1 when a check fails; warnings (no key, skipped live checks) do not fail the run.
+
+### Offline development
+
+```bash
+node tools/stub-server.mjs                       # deterministic, non-committal stub
+export TYPESAFE_BASE_URL=http://127.0.0.1:8787 TYPESAFE_API_KEY=stub
+jev ask --pack verify --state-file claim.json --state-format json --record out/claim.json
+jev gate --input out/claim.json --pack verify; echo "exit $?"
+```
+
+The stub answers the last option of a choice, the middle score, and noul 0.5, and it never claims the model you asked for: `model_resolved` comes back as `stub:<requested>` so a stub record is identifiable as one. Every bundled policy denies stub answers — a test asserts exactly that, through the real transport, for all three packs. It exists to test plumbing; never treat its output as a judgment, and never wire fabricated answers into a production path.
+
+### Scoring a policy on your data
+
+```bash
+jev ask --pack verify --state-file examples/verify/c1.json --state-format json --record out/c1.json
+# ... one record per labeled example ...
+npm run evaluate -- --records out/ --labels examples/verify/labels.jsonl
+```
+
+It reports label accuracy, the accept/review/deny/abstain mix, and the support curve: for each bucket, the share of cases whose label the policy really accepts, bucketed by the probability the policy treats as permission for the primary rule (accepted-label mass for a choice rule, the supportive probability for a noul). That is the curve `accept_at` sits on. Score rules are excluded from the curve because a score is not a probability. Evaluation stays a script over saved records; the CLI's inference path has no eval or threshold flags.
+
 ### Models
 
 ```bash
@@ -92,8 +229,11 @@ jev models
 
 | Code | Meaning |
 |------|---------|
-| 0 | success — inference completed, answers on stdout |
+| 0 | success — inference completed, answers on stdout; or `gate` accepted |
 | 1 | usage, transport, or API error |
+| 2 | `gate`: review |
+| 3 | `gate`: deny |
+| 4 | `gate`: abstain |
 
 ### Common Options
 
@@ -106,6 +246,11 @@ jev models
 | `--timeout <ms>` | Request timeout in ms (SDK default 10000) |
 | `--retries <n>` | Max retries, 0 disables (SDK default 2) |
 | `--concurrency <n>` | Batch concurrency (default 4, max 32) |
+| `--pack <name>` | Bundled questions (ask) or bundled policy (gate, lint) |
+| `--policy <file>` | Gate policy file |
+| `--input <file>` | Saved judgment or record for `gate` |
+| `--record <path>` | Write a decision record (noul/choice/score/ask) |
+| `--live` | `doctor`: also authenticate, list models, and probe |
 | `-f, --format <json\|table>` | Output format (default `json`) |
 | `--help` | Show help |
 | `--version` | Show version |
@@ -113,14 +258,15 @@ jev models
 ## Composition
 
 ```
-input producer → request builder → jev → policy/consumer → authorized action
+input producer → jev ask (pack) → record → jev gate → authorized action
+                                            ↘ jev replay / evaluate
 ```
 
-- A citation tool assembles claims and evidence, calls `jev`, then renders discrepancies.
-- A routing tool constructs candidates, reads the selected answer, then applies its own fallback policy.
-- An evaluation tool generates requests, stores predictions, and computes metrics independently.
+- A citation tool assembles claims and evidence, calls `jev ask --pack verify`, then reads the gate exit code.
+- An agent gate screens third-party content with `--pack screen` and routes work with `--pack route` before spending a call on a specialist.
+- An evaluation tool joins records with labels and computes metrics (`tools/evaluate.mjs`).
 
-Question design guidance lives in the [official skill](https://github.com/typesafe-ai/skills). Evaluation and calibration belong in separate tooling over saved results — this CLI deliberately has no `eval` command.
+Question design guidance lives in the [official skill](https://github.com/typesafe-ai/skills). Calibration runs over saved records, not inside inference: the CLI deliberately has no eval or threshold flags on the model-calling path.
 
 ## Library Usage
 
@@ -140,7 +286,18 @@ console.log(response.answers.is_urgent); // { type: "noul", noul: 0.98 }
 console.log(response.usage);             // { input_tokens, output_tokens }
 ```
 
-The package re-exports the official SDK client, builders, and error types.
+The package re-exports the official SDK client, builders, and error types, plus the offline decision layer:
+
+```typescript
+import { evaluatePolicy, extractResponse, loadPack, buildRecord } from "@fiale-plus/jev-cli";
+
+const { pack, hash } = loadPack("verify");
+const response = await jev.systemOne({ state: claim, questions: pack.questions });
+const result = evaluatePolicy(pack.policy, response);
+if (result.decision !== "accept") process.exit(result.exit_code);
+```
+
+`GATE_EXIT` maps a decision to its exit code; `extractResponse` accepts either a bare response or a decision record, so gating code does not care which one it was handed.
 
 ## Development
 
@@ -155,9 +312,15 @@ npm test
 npm run dev -- models
 npm run dev -- noul "Urgent?" --state "help, failing!"
 
+# Offline end-to-end: stub server + packs + gate + evaluation
+npm run stub &
+TYPESAFE_BASE_URL=http://127.0.0.1:8787 TYPESAFE_API_KEY=stub npm run dev -- ask --pack verify --state-file examples/verify/c1.json --state-format json
+
 # Integration tests (offline; no key needed)
 npm run test:integration
 ```
+
+`packs/` ships with the package; `examples/` holds inputs and labels only — no recorded model output is committed, because fabricated answers presented as real ones are worse than no examples at all.
 
 ## Disclaimer
 

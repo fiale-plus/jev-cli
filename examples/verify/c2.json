@@ -1,0 +1,4 @@
+{
+  "claim": "Objects in the bucket are encrypted at rest with AES-256.",
+  "evidence": "All objects are encrypted server-side using AES-256 before being written to disk."
+}

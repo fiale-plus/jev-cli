@@ -1,0 +1,51 @@
+{
+  "pack_version": 1,
+  "name": "route",
+  "description": "Decide how a request should be handled: deterministic code, a specialist model or tool, or a person. Useful as an agent gate in front of expensive handlers.",
+  "state_contract": {
+    "request": "The incoming request (string, or an object describing it).",
+    "handlers": "Optional description of the handlers actually available to the caller. Without it the model reasons from the handler descriptions in the criteria."
+  },
+  "questions": {
+    "handler": {
+      "type": "choice",
+      "instructions": "Which handler should process this request?",
+      "criteria": {
+        "deterministic": "Ordinary code answers it exactly: a lookup, a calculation, a format conversion, or a fixed rule.",
+        "specialist": "It needs a domain model or tool with context beyond this request, such as a policy question, a code change, or a document review.",
+        "human": "A person must decide: the request is ambiguous, high-stakes, or outside every automated handler.",
+        "none": "It is not an actionable request — a greeting, a statement, or something no available handler serves."
+      }
+    },
+    "complexity": {
+      "type": "score",
+      "instructions": "How hard is this request to handle correctly?",
+      "criteria": [
+        "Routine: a standard case with a clear answer.",
+        "Moderate: needs some judgment or a multi-step process.",
+        "Unusual: an edge case, an exception, or a request that may need escalation."
+      ]
+    }
+  },
+  "policy": {
+    "policy_version": 1,
+    "name": "route",
+    "mode": "all",
+    "rules": [
+      {
+        "answer": "handler",
+        "type": "choice",
+        "accept": ["deterministic", "specialist"],
+        "accept_at": 0.6,
+        "review_at": 0.45
+      },
+      {
+        "answer": "complexity",
+        "type": "score",
+        "higher_is_worse": true,
+        "accept_at": 1.0,
+        "review_at": 1.8
+      }
+    ]
+  }
+}
