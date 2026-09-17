@@ -26,10 +26,11 @@ jobs:
           package-manager-cache: false
 
       # Staged publishing needs npm >= 11.15.0; the version bundled with Node may
-      # be older (11.6.x rejects "npm stage" as an unknown command).
+      # be older (11.6.x rejects "npm stage" as an unknown command). Pinned to the
+      # 11.x line rather than @latest so the release path cannot jump a major.
       - name: Ensure a staging-capable npm CLI
         run: |
-          npm install -g npm@latest
+          npm install -g npm@^11.15.0
           npm --version
 
       # The release tag is the source of truth for what users install. A mismatch

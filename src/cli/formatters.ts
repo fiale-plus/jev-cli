@@ -26,6 +26,7 @@ export interface GateProvenance {
   model: string | null;
   record_version: number | null;
   pack_hash_matches_record: boolean | null;
+  questions_match_record: boolean | null;
   response_answers_hash: string;
 }
 
@@ -106,6 +107,17 @@ export function formatGate(result: GateResult, provenance: GateProvenance, forma
   if (result.rules.length === 0) lines.push("  (no rules applied)");
   for (const rule of result.rules) {
     lines.push(`  ${rule.answer} [${rule.type}] ${rule.decision} — ${rule.reason}`);
+  }
+  if (provenance.pack !== null) {
+    const match =
+      provenance.pack_hash_matches_record === null
+        ? "no record to compare"
+        : provenance.pack_hash_matches_record
+          ? "matches record"
+          : provenance.questions_match_record
+            ? "thresholds changed since the record"
+            : "differs from record";
+    lines.push(`pack: ${provenance.pack.name}@${provenance.pack.pack_version} ${shortHash(provenance.pack.hash)} (${match})`);
   }
   lines.push(
     `provenance: model ${provenance.model ?? "unknown"}, source ${provenance.policy_source}${provenance.record_version !== null ? `, record v${provenance.record_version}` : ""}`,

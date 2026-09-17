@@ -147,10 +147,24 @@ Each pack carries a state contract in its `state_contract` field, describing the
 
 - Every rule names one answer and the condition that permits proceeding.
 - A choice label outside `accept` never accepts, however confident the model is; what can soften a denial into `review` is probability mass sitting on an accepted label.
+- A choice answer must carry a probability map whose values sit in `[0, 1]` and sum to 1 (tolerance 0.05). A map that is missing, off-label, or unnormalized **abstains**: confidence is a number about the whole answer, and substituting it for a per-label probability would let a malformed answer pass a threshold.
+- A score must fall inside its scale — the rule's `range`, or the level indices the answer reports in `legend`/`probabilities`. A score outside that scale abstains, so `severity: -100` cannot glide past `accept_at: 0.5`.
 - A missing or wrong-typed answer abstains — it never accepts. Mark a rule `"optional": true` to skip it when absent.
 - `mode: "all"` (default) takes the worst outcome in the order `deny > abstain > review > accept`; `mode: "any"` is the reverse.
 
-Rules are validated on load: `review_at` above `accept_at`, a choice rule with no accepted label, or an unknown type fails loudly instead of silently never firing.
+Rules are validated on load: `review_at` above `accept_at`, a choice rule with no accepted label or a repeated one, an out-of-order `range`, or an unknown type fails loudly instead of silently never firing.
+
+### Pack identity
+
+Gating a record against the pack that produced it is checked in two parts, because the two kinds of change mean different things:
+
+| Change since the record was written | Result |
+|---|---|
+| questions changed | exit 1 — stored answers no longer mean what the current rules assume; re-run the request, or gate with `--policy <file>` if re-deciding is genuinely intended |
+| thresholds changed only | the current policy applies, with a warning on stderr |
+| identical | no note |
+
+Both the pack hash and that comparison are printed in `json` and `table` output, so an accepted decision never looks unqualified.
 
 ### Records and replay
 
@@ -171,9 +185,9 @@ Rules are validated on load: `review_at` above `accept_at`, a choice rule with n
 }
 ```
 
-The state is **hashed, not stored**: a record can live beside a log without carrying the confidential text that produced the decision, and the hash still proves which input was judged. Questions are hashed for the same reason.
+The state is **hashed, not stored**: a record can live beside a log without carrying the confidential text that produced the decision, while still committing to the exact input the CLI sent. The hash is type-tagged and versioned, so a text state cannot collide with the JSON state that parses to the same bytes. It is an unsigned commitment, not proof of what the model read: only the response, returned by the API under TLS, attests to that.
 
-`jev replay --record <file>` prints those stored answers again with `"replayed": true` — no API call, for re-running downstream policy or comparing a stored decision against a fresh one. Replay is not a rerun: an answer is reproducible only while the model version stays pinned, which is why `model_resolved` is recorded.
+`jev replay --record <file>` prints those stored answers again with `"replayed": true` — no API call, for re-running downstream policy or comparing a stored decision against a fresh one. Replay is not a rerun: an answer is reproducible only while the model version stays pinned, which is why `model_resolved` is recorded. `<path>` is created along with any missing parent directories, before the request is sent, so a bad path cannot fail after you have paid for an answer.
 
 ### Doctor
 
@@ -193,7 +207,7 @@ jev ask --pack verify --state-file claim.json --state-format json --record out/c
 jev gate --input out/claim.json --pack verify; echo "exit $?"
 ```
 
-The stub answers the last option of a choice, the middle score, and noul 0.5, so a stub run cannot look like an approval. It exists to test plumbing — never treat its output as a judgment, and never wire fabricated answers into a production path.
+The stub answers the last option of a choice, the middle score, and noul 0.5, and it never claims the model you asked for: `model_resolved` comes back as `stub:<requested>` so a stub record is identifiable as one. Every bundled policy denies stub answers — a test asserts exactly that, through the real transport, for all three packs. It exists to test plumbing; never treat its output as a judgment, and never wire fabricated answers into a production path.
 
 ### Scoring a policy on your data
 
@@ -203,7 +217,7 @@ jev ask --pack verify --state-file examples/verify/c1.json --state-format json -
 npm run evaluate -- --records out/ --labels examples/verify/labels.jsonl
 ```
 
-It reports label accuracy, the accept/review/deny/abstain mix, and the empirical acceptance rate per probability bucket — the number that tells you whether `accept_at` is anywhere near the right place. Evaluation stays a script over saved records; the CLI's inference path has no eval or threshold flags.
+It reports label accuracy, the accept/review/deny/abstain mix, and the support curve: for each bucket, the share of cases whose label the policy really accepts, bucketed by the probability the policy treats as permission for the primary rule (accepted-label mass for a choice rule, the supportive probability for a noul). That is the curve `accept_at` sits on. Score rules are excluded from the curve because a score is not a probability. Evaluation stays a script over saved records; the CLI's inference path has no eval or threshold flags.
 
 ### Models
 

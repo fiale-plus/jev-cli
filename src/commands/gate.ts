@@ -3,7 +3,7 @@ import type { OutputFormat } from "../cli/formatters.js";
 import { formatGate } from "../cli/formatters.js";
 import type { GatePolicy } from "../cli/policy.js";
 import { GATE_EXIT, coercePolicy, evaluatePolicy } from "../cli/policy.js";
-import { extractResponse, isRecord } from "../cli/records.js";
+import { coerceRecord, extractResponse, isRecord } from "../cli/records.js";
 import { loadPack } from "./packs.js";
 import { hashValue } from "../utils/hash.js";
 import { readJsonFile } from "../utils/io.js";
@@ -11,6 +11,8 @@ import { readJsonFile } from "../utils/io.js";
 export interface ResolvedPolicy {
   policy: GatePolicy;
   pack: { name: string; pack_version: number; hash: string } | null;
+  /** Hash of the pack's questions alone, to separate "questions changed" from "thresholds changed". */
+  questionsHash: string | null;
   source: string;
 }
 
@@ -25,13 +27,13 @@ export function resolvePolicy(global: GlobalOptions): ResolvedPolicy {
     return {
       policy: loaded.pack.policy,
       pack: { name: loaded.pack.name, pack_version: loaded.pack.pack_version, hash: loaded.hash },
+      questionsHash: `sha256:${hashValue(loaded.pack.questions)}`,
       source: loaded.path,
     };
   }
   if (global.policy !== undefined) {
-    const raw = readRecordOrJson(global.policy);
-    const policy = coercePolicy(raw);
-    return { policy, pack: null, source: global.policy };
+    const policy = coercePolicy(readRecordOrJson(global.policy));
+    return { policy, pack: null, questionsHash: null, source: global.policy };
   }
   throw new Error("Missing policy: pass --pack <name> or --policy <file>. Run `jev packs` to list packs.");
 }
@@ -49,19 +51,41 @@ export async function handleGate(global: GlobalOptions, format: OutputFormat): P
   if (!global.input) {
     throw new Error("Missing --input <file>: jev gate --input judgment.json --pack <name> | --policy <file>.");
   }
-  const { policy, pack, source } = resolvePolicy(global);
+  const { policy, pack, questionsHash, source } = resolvePolicy(global);
 
   const input = readJsonFile(global.input);
-  const response = extractResponse(input);
+  const record = isRecord(input) ? coerceRecord(input) : null;
+  const response = record !== null ? record.response : extractResponse(input);
+
+  // Gating a record against the pack that produced it: if the questions changed,
+  // the stored answers no longer mean what the current rules assume. Re-deciding
+  // old answers under new questions has to be deliberate, so it exits 1.
+  const questionsMatch = record?.pack !== null && record?.pack !== undefined && questionsHash !== null
+    ? record.questions_sha256 === questionsHash
+    : null;
+  if (questionsMatch === false) {
+    throw new Error(
+      `Pack "${pack?.name}" changed its questions since this record was written (record ${record?.pack?.hash}, current ${pack?.hash}). ` +
+        "Stored answers cannot be re-judged under different questions. Re-run the request, or gate with --policy <file> if re-deciding is intended.",
+    );
+  }
+
+  const packHashMatches = record?.pack !== null && record?.pack !== undefined && pack !== null ? record.pack.hash === pack.hash : null;
+  if (packHashMatches === false) {
+    process.stderr.write(
+      `warning: pack "${pack?.name}" thresholds changed since this record was written (record ${record?.pack?.hash}, current ${pack?.hash}); the questions are unchanged, so the current policy is applied.\n`,
+    );
+  }
+
   const result = evaluatePolicy(policy, response);
 
   const provenance = {
     policy_source: source,
     pack,
     model: response.model ?? null,
-    record_version: isRecord(input) ? input.record_version : null,
-    pack_hash_matches_record:
-      isRecord(input) && input.pack !== null && pack !== null ? input.pack.hash === pack.hash : null,
+    record_version: record?.record_version ?? null,
+    pack_hash_matches_record: packHashMatches,
+    questions_match_record: questionsMatch,
     response_answers_hash: `sha256:${hashValue(response.answers ?? {})}`,
   };
 

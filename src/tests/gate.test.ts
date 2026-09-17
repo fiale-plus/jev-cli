@@ -24,7 +24,14 @@ const choice = (label: string, probabilities: Record<string, number>) => ({
   probabilities,
   confidence: probabilities[label] ?? 0,
 });
-const score = (s: number) => ({ type: "score", score: s });
+// Real score answers carry the level indices as legend/probability keys; the
+// evaluator derives the valid range from them.
+const score = (s: number, levels = 4) => ({
+  type: "score",
+  score: s,
+  legend: Object.fromEntries(Array.from({ length: levels }, (_, i) => [String(i), `level ${i}`])),
+  probabilities: Object.fromEntries(Array.from({ length: levels }, (_, i) => [String(i), 1 / levels])),
+});
 
 describe("gate: noul rules", () => {
   it("accepts at or above accept_at and reviews inside the band", () => {
@@ -68,16 +75,21 @@ describe("gate: choice rules", () => {
     assert.equal(split.decision, "deny");
   });
 
-  it("falls back to the reported confidence when the chosen label has no probability entry", () => {
+  it("abstains when the probability map is missing, malformed, or off-label", () => {
     const p = policy([{ answer: "relation", type: "choice", accept: ["supports"], accept_at: 0.8 }]);
-    const answer = { type: "choice", choice: "supports", probabilities: { other: 0.9 }, confidence: 0.85 };
-    assert.equal(evaluatePolicy(p, answers({ relation: answer })).decision, "accept");
+    // Confidence is about the answer as a whole, not this label: no substitution.
+    assert.equal(evaluatePolicy(p, answers({ relation: { type: "choice", choice: "supports", confidence: 0.99 } })).decision, "abstain");
+    assert.equal(evaluatePolicy(p, answers({ relation: choice("supports", { other: 0.9, other2: 0.1 }) })).decision, "abstain");
+    assert.equal(evaluatePolicy(p, answers({ relation: choice("supports", { supports: 2, contradicts: -1 }) })).decision, "abstain");
+    assert.equal(evaluatePolicy(p, answers({ relation: choice("supports", { supports: 0.7, contradicts: 0.7 }) })).decision, "abstain");
   });
 
-  it("abstains when neither a probability nor a confidence is reported", () => {
-    const p = policy([{ answer: "relation", type: "choice", accept: ["supports"], accept_at: 0.8 }]);
-    const answer = { type: "choice", choice: "supports" };
-    assert.equal(evaluatePolicy(p, answers({ relation: answer })).decision, "abstain");
+  it("counts each accepted label once when the policy repeats one", () => {
+    // Lint rejects this, so it can only arrive from an unvalidated caller: the
+    // doubled label must not inflate the mass into a review.
+    const p = policy([{ answer: "relation", type: "choice", accept: ["supports", "supports"], review_at: 0.5 }]);
+    const result = evaluatePolicy(p, answers({ relation: choice("contradicts", { supports: 0.3, contradicts: 0.7 }) }));
+    assert.equal(result.decision, "deny");
   });
 });
 
@@ -94,6 +106,21 @@ describe("gate: score rules", () => {
     assert.equal(evaluatePolicy(p, answers({ score: score(0.9) })).decision, "accept");
     assert.equal(evaluatePolicy(p, answers({ score: score(0.6) })).decision, "review");
     assert.equal(evaluatePolicy(p, answers({ score: score(0.2) })).decision, "deny");
+  });
+
+  it("abstains on a score outside the reported scale instead of accepting it", () => {
+    const p = policy([{ answer: "severity", type: "score", accept_at: 0.5, review_at: 1.5 }]);
+    assert.equal(evaluatePolicy(p, answers({ severity: score(-100) })).decision, "abstain");
+    assert.equal(evaluatePolicy(p, answers({ severity: score(99) })).decision, "abstain");
+  });
+
+  it("abstains when the scale is unknowable, and honours an explicit range", () => {
+    const noScale = policy([{ answer: "severity", type: "score", accept_at: 0.5, review_at: 1.5 }]);
+    assert.equal(evaluatePolicy(noScale, answers({ severity: { type: "score", score: 0.2 } })).decision, "abstain");
+
+    const explicit = policy([{ answer: "severity", type: "score", accept_at: 0.5, review_at: 1.5, range: [0, 3] }]);
+    assert.equal(evaluatePolicy(explicit, answers({ severity: { type: "score", score: 0.2 } })).decision, "accept");
+    assert.equal(evaluatePolicy(explicit, answers({ severity: { type: "score", score: -1 } })).decision, "abstain");
   });
 });
 
@@ -203,6 +230,25 @@ describe("gate: policy linting", () => {
     assert.equal(lintPolicy(policy([{ answer: "a", type: "choice", accept: [] }])).ok, false);
   });
 
+  it("rejects an inverted choice band and a repeated accepted label", () => {
+    const inverted = lintPolicy(policy([{ answer: "a", type: "choice", accept: ["yes"], accept_at: 0.6, review_at: 0.9 }]));
+    assert.equal(inverted.ok, false);
+    assert.ok(inverted.errors.some((e) => e.includes("review_at")));
+
+    // The default review_at applies when only accept_at is given.
+    assert.equal(lintPolicy(policy([{ answer: "a", type: "choice", accept: ["yes"], accept_at: 0.4 }])).ok, false);
+
+    const repeated = lintPolicy(policy([{ answer: "a", type: "choice", accept: ["yes", "yes"] }]));
+    assert.equal(repeated.ok, false);
+    assert.ok(repeated.errors.some((e) => e.includes("repeats")));
+  });
+
+  it("rejects a malformed score range", () => {
+    assert.equal(lintPolicy(policy([{ answer: "a", type: "score", accept_at: 1, review_at: 2, range: [3, 3] }])).ok, false);
+    assert.equal(lintPolicy(policy([{ answer: "a", type: "score", accept_at: 1, review_at: 2, range: [0] } as unknown as GatePolicy["rules"][number]])).ok, false);
+    assert.equal(lintPolicy(policy([{ answer: "a", type: "score", accept_at: 1, review_at: 2, range: [0, 3] }])).ok, true);
+  });
+
   it("throws from coercePolicy with the first structural problem", () => {
     assert.throws(() => coercePolicy({ policy_version: 1, name: "x", rules: [{ answer: "a", type: "bogus" }] }), /Invalid policy/);
   });
@@ -242,6 +288,20 @@ describe("records", () => {
     assert.ok(record.state_sha256?.startsWith("sha256:"));
     assert.equal(JSON.stringify(record).includes("secret claim text"), false);
     assert.equal(record.pack, null);
+  });
+
+  it("distinguishes states that serialize to the same bytes", () => {
+    const build = (state: unknown) => buildRecord({ pack: null, modelRequested: undefined, state, questions: {} as Questions, latencyMs: 1 }, MIXED_RESPONSE).state_sha256;
+    const hashes = [build('{"a":1}'), build({ a: 1 }), build("123"), build(123), build(null), build(undefined)];
+    assert.equal(new Set(hashes).size, hashes.length, `state hashes must be distinct per input: ${JSON.stringify(hashes)}`);
+  });
+
+  it("rejects a record envelope that is malformed or from another version", () => {
+    assert.throws(() => extractResponse({ record_version: 2, response: { answers: {} }, answers: { a: {} } }), /Unsupported record_version 2/);
+    assert.throws(() => extractResponse({ record_version: 1, response: null }), /"response" must be an object/);
+    assert.throws(() => extractResponse({ record_version: 1, response: { model: "m", answers: {}, usage: {} } }), /created_at/);
+    // A malformed envelope must never be reinterpreted as a bare response.
+    assert.throws(() => extractResponse({ record_version: 2, response: { answers: { a: {} } }, answers: { a: {} } }), /Unsupported/);
   });
 
   it("accepts a bare response where a record is expected", () => {

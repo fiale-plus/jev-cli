@@ -79,8 +79,11 @@ const server = createServer((req, res) => {
       const questions = body?.questions ?? {};
       const answers = Object.fromEntries(Object.entries(questions).map(([id, question]) => [id, answerFor(id, question, body?.state)]));
       const input_tokens = Math.max(1, Math.ceil((raw.length + JSON.stringify(body?.state ?? "").length) / 4));
+      // The response never claims the requested model: a record from a stub must
+      // be identifiable as one by model_resolved alone.
+      const model = `stub:${typeof body?.model === "string" ? body.model : "default"}`;
       process.stderr.write(`[stub] ${Object.keys(questions).length} question(s) -> ${input_tokens} input tokens\n`);
-      send(200, { model: body?.model ?? "stub-latest", answers, usage: { input_tokens, output_tokens: Object.keys(questions).length * 8 } });
+      send(200, { model, answers, usage: { input_tokens, output_tokens: Object.keys(questions).length * 8 } });
     });
     return;
   }

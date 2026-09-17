@@ -13,7 +13,7 @@ export interface RecordPackRef {
 }
 
 // Opt-in decision record. The raw state is deliberately not stored: it can hold
-// confidential text, and the hash is enough to prove which input produced an answer.
+// confidential text, and the hash is enough to commit to which input was judged.
 export interface DecisionRecord {
   record_version: number;
   created_at: string;
@@ -35,9 +35,11 @@ export interface RecordInputs {
   latencyMs: number;
 }
 
+// Type-tagged and versioned, so a text state cannot collide with the JSON state
+// that parses to the same bytes, and absent state is distinct from JSON null.
 function stateHash(state: unknown): string | null {
-  if (state === undefined || state === null) return null;
-  return typeof state === "string" ? `sha256:${sha256Hex(state)}` : `sha256:${hashValue(state)}`;
+  if (state === undefined) return null;
+  return `sha256:${hashValue({ state_version: 1, type: typeof state === "string" ? "text" : "json", value: state })}`;
 }
 
 export function buildRecord(inputs: RecordInputs, response: SystemOneResult<Questions>): DecisionRecord {
@@ -59,29 +61,54 @@ export function writeRecord(path: string, record: DecisionRecord): void {
   writeFileSync(path, JSON.stringify(record, null, 2) + "\n", "utf8");
 }
 
-export function isRecord(input: unknown): input is DecisionRecord {
-  return (
-    typeof input === "object" &&
-    input !== null &&
-    (input as { record_version?: unknown }).record_version === RECORD_VERSION &&
-    typeof (input as { response?: unknown }).response === "object"
-  );
-}
-
-// Accepts either a record or a bare response object, so `gate` can read the output
-// of `ask` directly as well as a saved record.
-export function extractResponse(input: unknown): SystemOneResult<Questions> {
-  if (isRecord(input)) return input.response;
-  if (typeof input === "object" && input !== null && "answers" in input) {
-    return input as SystemOneResult<Questions>;
-  }
-  throw new Error("Invalid input: expected a response object with an \"answers\" map, or a decision record with a \"response\" field.");
-}
-
 export function recordCost(record: DecisionRecord): { input_tokens: number; output_tokens: number; estimated_usd: number } {
   return {
     input_tokens: record.response.usage.input_tokens,
     output_tokens: record.response.usage.output_tokens,
     estimated_usd: estimateCostUsd(record.response.usage.input_tokens),
   };
+}
+
+// Envelope detector. Anything carrying record fields is treated as a record and
+// must validate as one: falling back to a bare response would let a malformed or
+// newer record be reinterpreted as a different judgment.
+export function isRecord(input: unknown): input is DecisionRecord {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    !Array.isArray(input) &&
+    ("record_version" in input || "response" in input)
+  );
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Validates the fields that gate and replay dereference, so a hand-edited or
+// truncated record fails with a message instead of a TypeError.
+export function coerceRecord(input: unknown): DecisionRecord {
+  if (!isObject(input)) throw new Error("Invalid record: expected a JSON object.");
+  if (input.record_version !== RECORD_VERSION) {
+    throw new Error(`Unsupported record_version ${JSON.stringify(input.record_version ?? null)}: this CLI writes version ${RECORD_VERSION}.`);
+  }
+  if (!isObject(input.response)) {
+    throw new Error('Invalid record: "response" must be an object.');
+  }
+  const response = input.response;
+  if (!isObject(response.answers)) throw new Error('Invalid record: "response.answers" must be an object.');
+  if (typeof response.model !== "string") throw new Error('Invalid record: "response.model" must be a string.');
+  if (!isObject(response.usage)) throw new Error('Invalid record: "response.usage" must be an object.');
+  if (typeof input.created_at !== "string") throw new Error('Invalid record: "created_at" must be a string.');
+  if (typeof input.model_resolved !== "string") throw new Error('Invalid record: "model_resolved" must be a string.');
+  if (typeof input.latency_ms !== "number") throw new Error('Invalid record: "latency_ms" must be a number.');
+  return input as unknown as DecisionRecord;
+}
+
+// Accepts either a record or a bare response object, so `gate` can read the output
+// of `ask` directly as well as a saved record.
+export function extractResponse(input: unknown): SystemOneResult<Questions> {
+  if (isRecord(input)) return coerceRecord(input).response;
+  if (isObject(input) && "answers" in input) return input as unknown as SystemOneResult<Questions>;
+  throw new Error('Invalid input: expected a response object with an "answers" map, or a decision record with a "response" field.');
 }

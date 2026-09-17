@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { createClient } from "../api/client.js";
 import type { ClientOpts } from "../api/client.js";
 import type { GlobalOptions } from "../cli/parseArgs.js";
@@ -40,6 +42,11 @@ interface EmitOptions {
 // Successful inference always exits 0. Confidence is data, not authorization:
 // callers decide which answers matter and apply their own policy.
 async function emit({ opts, state, questions, model, format, pack, recordPath, signal }: EmitOptions): Promise<void> {
+  if (recordPath !== undefined) {
+    // Prepared before the request: a bad record path must fail before paying for
+    // an answer that would then have nowhere to go.
+    mkdirSync(dirname(resolve(recordPath)), { recursive: true });
+  }
   const client = createClient(opts);
   const started = Date.now();
   const response = await client.systemOne(

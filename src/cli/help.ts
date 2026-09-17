@@ -155,8 +155,21 @@ RULES
   Every rule names one answer and the condition that permits proceeding.
   A label outside "accept" never accepts, however confident the model is.
   A missing or wrong-typed answer abstains — it never accepts.
+  A choice answer must carry a probability map whose values sit in [0, 1] and sum
+  to 1: a malformed or off-label map abstains rather than falling back to a
+  confidence number that means something else.
+  A score must fall inside its scale (the rule's "range", else the level indices
+  the answer reports in legend/probabilities); an out-of-scale score abstains.
   mode "all" (default) takes the worst outcome: deny > abstain > review > accept.
   mode "any" is the reverse. Mark a rule "optional": true to skip it when absent.
+
+RECORDS
+  Gating a record written by --record against the pack that produced it checks
+  identity: if the pack's questions changed, the stored answers no longer mean
+  the same thing, so the run fails (exit 1) until you re-run the request or gate
+  with --policy explicitly. If only the thresholds changed, the questions are
+  unchanged and the current policy applies, with a warning on stderr. Both the
+  pack hash and that comparison are printed in either format.
 
 EXIT CODES
   0 accept   2 review   3 deny   4 abstain   1 error

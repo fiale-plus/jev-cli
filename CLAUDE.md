@@ -38,9 +38,10 @@ Requires Node.js >= 22.
 - API speaks camelCase bodies; CLI flags use kebab-case
 - Successful inference exits 0; policy lives in the caller
 - Gate exit codes are decisions: 0 accept, 2 review, 3 deny, 4 abstain (1 = error). Judgment on stdout, decision in the status
-- Policy evaluation is offline and fail-closed: a missing or mismatched answer abstains, and a label outside `accept` never accepts
-- Records hash the state; never store it. `jev replay` is not a rerun
-- `--version` reads `package.json` at runtime; the publish workflow fails when a release tag disagrees with it
+- Policy evaluation is offline and fail-closed: a missing or wrong-typed answer abstains; a choice answer needs a normalized probability map (no confidence substitution); a score must sit inside its reported scale; a label outside `accept` never accepts
+- Records hash the state (type-tagged) and never store it; a record from a stub carries a `stub:` model so it cannot pass as real. `jev replay` is not a rerun
+- Gating a record against its pack checks identity: changed questions exit 1, changed thresholds warn
+- `--version` reads `package.json` at runtime; the publish workflow fails when a release tag disagrees with it, and stages with `npm stage publish` for manual 2FA approval
 - Tests mock `global.fetch` with real `Response` objects (SDK clones responses); `contract.test.ts` spawns the real CLI
 - Structural lint only; question-design advice lives in the official skill
 - No eval/calibration or threshold flags on the model-calling path; evaluation runs over saved records

@@ -32,9 +32,30 @@ const json = process.argv.includes("--json");
 const input = recordsArg === "-" ? 0 : recordsArg;
 
 const loaded = loadPack(packName);
-const firstChoiceRule = loaded.pack.policy.rules.find((rule) => rule.type === "choice");
-const answerId = arg("answer", firstChoiceRule?.answer ?? loaded.pack.policy.rules[0].answer);
-const accepted = firstChoiceRule?.accept ?? [];
+const primaryRule = loaded.pack.policy.rules[0];
+const answerId = arg("answer", primaryRule.answer);
+const accepted = primaryRule.type === "choice" ? [...new Set(primaryRule.accept)] : [];
+
+// Probability the policy treats as permission for the primary rule. Bucketing the
+// probability of the *chosen* label would mix confident `supports` and confident
+// `contradicts` into one bucket and make good separation look like none.
+function supportProbability(rule, answer) {
+  if (!answer || typeof answer !== "object") return undefined;
+  if (rule.type === "choice") {
+    const probabilities = answer.probabilities;
+    if (typeof probabilities !== "object" || probabilities === null) return undefined;
+    return [...new Set(rule.accept)].reduce((sum, label) => {
+      const value = probabilities[label];
+      return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
+  }
+  if (rule.type === "noul") {
+    if (!Number.isFinite(answer.noul)) return undefined;
+    return (rule.accept_when ?? "yes") === "yes" ? answer.noul : 1 - answer.noul;
+  }
+  // Scores are not probabilities: bucketing them would repeat the same mistake.
+  return undefined;
+}
 
 function readLines(source) {
   return readFileSync(source, "utf8")
@@ -117,7 +138,7 @@ for (const item of cases) {
   rows.push({
     label: item.label,
     chosen: answer?.choice ?? (answer?.type === "noul" ? (answer.noul >= 0.5 ? "yes" : "no") : answer?.score),
-    probability: Number.isFinite(answer?.probabilities?.[answer?.choice]) ? answer.probabilities[answer.choice] : (answer?.confidence ?? answer?.noul),
+    support: supportProbability(primaryRule, answer),
     decision: result.decision,
     shouldAccept: accepted.length > 0 ? accepted.includes(item.label) : undefined,
   });
@@ -142,8 +163,8 @@ for (const row of rows) {
   else if (row.decision !== "accept" && !row.shouldAccept) confusion.correct_deny++;
   else confusion.other++;
 
-  if (Number.isFinite(row.probability)) {
-    const bucket = Math.min(0.9, Math.floor(row.probability * 10) / 10);
+  if (Number.isFinite(row.support)) {
+    const bucket = Math.min(0.9, Math.floor(row.support * 10) / 10);
     const entry = buckets.get(bucket) ?? { n: 0, right: 0 };
     entry.n++;
     if (row.shouldAccept) entry.right++;
@@ -156,6 +177,7 @@ const summary = {
   pack: loaded.pack.name,
   pack_hash: loaded.hash,
   policy: loaded.pack.policy.name,
+  primary_rule: { answer: primaryRule.answer, type: primaryRule.type },
   answer: answerId,
   accepted_labels: accepted,
   records: rows.length,
@@ -163,24 +185,30 @@ const summary = {
   label_accuracy: Number(accuracy.toFixed(4)),
   decisions,
   confusion,
-  calibration: [...buckets.entries()]
+  // Support calibration: bucket = probability the policy treats as permission for
+  // the primary rule; accepted_rate = share of those cases whose label really is
+  // acceptable. This is the curve `accept_at` should sit on.
+  support_calibration: [...buckets.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([bucket, v]) => ({ probability_bucket: Number(bucket.toFixed(2)), n: v.n, accepted_rate: Number((v.right / v.n).toFixed(3)) })),
+    .map(([bucket, v]) => ({ support_bucket: Number(bucket.toFixed(2)), n: v.n, accepted_rate: Number((v.right / v.n).toFixed(3)) })),
 };
 
 if (json) {
   process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
 } else {
   process.stdout.write(`pack ${summary.pack} ${summary.pack_hash.slice(0, 19)}\n`);
-  process.stdout.write(`policy ${summary.policy}, answer "${answerId}", accepted labels: ${accepted.join(", ") || "n/a"}\n`);
+  process.stdout.write(`policy ${summary.policy}, answer "${answerId}" (${primaryRule.type}), accepted labels: ${accepted.join(", ") || "n/a"}\n`);
   process.stdout.write(`records ${summary.records} (skipped ${summary.skipped})\n`);
   process.stdout.write(`label accuracy ${(accuracy * 100).toFixed(1)}%  [${correct}/${rows.length}]\n\n`);
   process.stdout.write("decisions: " + Object.entries(decisions).map(([k, v]) => `${k} ${v}`).join("  ") + "\n");
   process.stdout.write(`confusion: true_accept ${confusion.true_accept}  false_accept ${confusion.false_accept}  missed_accept ${confusion.missed_accept}  correct_deny ${confusion.correct_deny}\n\n`);
-  process.stdout.write("probability bucket -> share of labels the policy accepts\n");
-  for (const row of summary.calibration) {
+  process.stdout.write("support bucket -> share of those cases whose label the policy accepts\n");
+  for (const row of summary.support_calibration) {
     const bar = "#".repeat(Math.round(row.accepted_rate * 40));
-    process.stdout.write(`  ${row.probability_bucket.toFixed(1)}  n=${String(row.n).padStart(4)}  ${(row.accepted_rate * 100).toFixed(0).padStart(3)}% ${bar}\n`);
+    process.stdout.write(`  ${row.support_bucket.toFixed(1)}  n=${String(row.n).padStart(4)}  ${(row.accepted_rate * 100).toFixed(0).padStart(3)}% ${bar}\n`);
   }
-  process.stdout.write("\nA well-placed accept_at sits where the accepted rate crosses ~0.9; a flat column means the score does not separate your labels on this data.\n");
+  if (summary.support_calibration.length === 0) {
+    process.stdout.write("  (no probability buckets: the primary rule is a score rule, which is not a probability)\n");
+  }
+  process.stdout.write("\nThe support bucket is the chance the policy treats as permission; accept_at belongs where that column crosses the share you are willing to accept.\n");
 }

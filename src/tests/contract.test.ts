@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -49,6 +49,22 @@ function run(args: string[], stdin = "", env: Record<string, string> = {}): Prom
   const stdout = typeof child.stdout === "string" ? child.stdout : String(child.stdout ?? "");
   const stderr = typeof child.stderr === "string" ? child.stderr : String(child.stderr ?? "");
   return Promise.resolve({ code, stdout, stderr });
+}
+
+// Real transport, no fixture: the CLI talks to a real HTTP server. Needed to test
+// base-URL handling and the stub server, which the fetch fixture would shadow.
+function runRealTransport(args: string[], env: Record<string, string> = {}): RunResult {
+  const child = spawnSync(process.execPath, ["--import", "tsx", join(__dirname, "..", "cli.ts"), ...args], {
+    env: { ...process.env, TYPESAFE_API_KEY: "stub-transport-key", ...env },
+    input: "",
+    timeout: 30_000,
+    encoding: "utf8",
+  });
+  return {
+    code: child.status ?? 1,
+    stdout: typeof child.stdout === "string" ? child.stdout : String(child.stdout ?? ""),
+    stderr: typeof child.stderr === "string" ? child.stderr : String(child.stderr ?? ""),
+  };
 }
 
 function stdoutJsonLines(stdout: string): Array<Record<string, unknown>> {
@@ -283,6 +299,72 @@ describe("gate and record contract (offline)", () => {
     const linted = await run(["lint", "--pack", "verify"], "", { TYPESAFE_API_KEY: "" });
     assert.equal(linted.code, 0, linted.stderr);
     assert.ok(JSON.parse(linted.stdout).ok);
+  });
+
+  it("refuses to gate a record whose pack questions have changed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-contract-"));
+    const recordPath = join(dir, "claim.json");
+    // A record from the current pack, then the same record under a pack whose
+    // questions were revised: the stored answers no longer mean the same thing.
+    const ask = await run(["ask", "--pack", "verify", "--state", "claim", "--record", recordPath]);
+    assert.equal(ask.code, 0, ask.stderr);
+    const record = JSON.parse(readFileSync(recordPath, "utf8")) as { questions_sha256: string; pack: { hash: string } };
+    record.questions_sha256 = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    writeFileSync(recordPath, JSON.stringify(record));
+
+    const blocked = await run(["gate", "--input", recordPath, "--pack", "verify"]);
+    assert.equal(blocked.code, 1);
+    assert.equal(blocked.stdout, "");
+    assert.ok(blocked.stderr.includes("changed its questions"));
+
+    // Re-deciding is possible, but only by naming the policy explicitly.
+    const policyPath = join(dir, "policy.json");
+    writeFileSync(policyPath, JSON.stringify({ policy_version: 1, name: "p", rules: [{ answer: "relation", type: "choice", accept: ["supports"], accept_at: 0.5 }] }));
+    const allowed = await run(["gate", "--input", recordPath, "--policy", policyPath]);
+    assert.equal(allowed.code, 3, allowed.stderr);
+  });
+
+  it("warns, rather than refusing, when only the pack thresholds changed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-contract-"));
+    const recordPath = join(dir, "nested", "claim.json");
+    const ask = await run(["ask", "--pack", "verify", "--state", "claim", "--record", recordPath]);
+    // --record creates the parent directory: it must not fail after paying.
+    assert.equal(ask.code, 0, ask.stderr);
+
+    const record = JSON.parse(readFileSync(recordPath, "utf8")) as { pack: { hash: string } };
+    record.pack.hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    writeFileSync(recordPath, JSON.stringify(record));
+
+    const r = await run(["gate", "--input", recordPath, "--pack", "verify"]);
+    assert.equal(r.code, 3, r.stderr);
+    assert.ok(r.stderr.includes("thresholds changed"));
+    const parsed = JSON.parse(r.stdout) as { provenance: { pack_hash_matches_record: boolean; questions_match_record: boolean } };
+    assert.equal(parsed.provenance.pack_hash_matches_record, false);
+    assert.equal(parsed.provenance.questions_match_record, true);
+  });
+
+  it("denies stub answers under every bundled pack", async () => {
+    // The stub is documented as non-committal: bundled policies must not accept it.
+    // No fetch fixture here — this exercises the real transport against a real server.
+    const port = "8791";
+    const server = spawn(process.execPath, [join(__dirname, "..", "..", "tools", "stub-server.mjs"), "--port", port], { stdio: "ignore" });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const env = { TYPESAFE_BASE_URL: `http://127.0.0.1:${port}` };
+      for (const pack of ["verify", "screen", "route"]) {
+        const dir = mkdtempSync(join(tmpdir(), "jev-contract-"));
+        const recordPath = join(dir, "record.json");
+        const ask = runRealTransport(["ask", "--pack", pack, "--state", "The deployment finished without errors.", "--record", recordPath], env);
+        assert.equal(ask.code, 0, `${pack}: ${ask.stderr}`);
+        const record = JSON.parse(readFileSync(recordPath, "utf8")) as { model_resolved: string };
+        // A stub record must be identifiable as one.
+        assert.ok(record.model_resolved.startsWith("stub:"), `expected a stub model identity, got ${record.model_resolved}`);
+        const gate = runRealTransport(["gate", "--input", recordPath, "--pack", pack], env);
+        assert.equal(gate.code, 3, `${pack}: expected deny on stub answers, got ${gate.code}: ${gate.stdout}${gate.stderr}`);
+      }
+    } finally {
+      server.kill();
+    }
   });
 
   it("doctor reports configuration without printing the key", async () => {
