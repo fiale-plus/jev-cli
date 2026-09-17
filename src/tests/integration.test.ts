@@ -42,7 +42,7 @@ describe("CLI integration (offline)", () => {
   });
 
   it("errors when ask has no request source", async () => {
-    const { stderr } = await run(["ask", "--state", "ticket"]);
+    const { stderr } = await run(["ask", "--state", "ticket"], { TYPESAFE_API_KEY: "test-key" });
     assert.ok(stderr.includes("Missing questions"));
   });
 
