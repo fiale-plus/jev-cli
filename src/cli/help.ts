@@ -4,43 +4,40 @@ USAGE
   jev <command> [args] [options]
 
 COMMANDS
-  noul <instructions>              Yes/no judgment (returns noul 0..1 + verdict)
+  noul <instructions>              Yes/no judgment (returns noul 0..1)
   choice <instructions>            Pick one option (--option name="desc" ×2+)
   score <instructions>             Rate along levels (--level "desc" ×2+, lowest first)
-  ask                              Batch: --questions file.json (+ state), one parallel call
+  ask                              Batch questions over one state in a single call
+  batch                            Many requests from a JSONL file, bounded concurrency
   lint                             Validate a questions file without calling the API
-  eval                             Sweep thresholds over a labeled JSONL dataset
   models                           List models available to your key
 
-STATE (all judgment commands)
+STATE (noul/choice/score/ask)
   --state <text>                   State inline
   --state-file <path>              State from file ("-" = stdin)
+  --state-format <text|json>       Parse state input as JSON (default text)
   --stdin                          Read state from stdin
   (bare positional args after instructions are joined as state)
 
-QUESTIONS FILE (ask)
-  {"qid": {"type": "noul|choice|score", "instructions": "...", "criteria": ...}}
-  IDs are for your code only — never sent to the model. Write complete
-  instructions even when the ID looks self-explanatory.
+REQUEST FILE (ask)
+  --request <path>                 Full request {"state","questions","model?"}
+  --questions <file>               Questions map (with --state/--state-file/--stdin)
 
-THRESHOLDS (local policy, evaluated in code — not sent to the API)
-  --yes-at <p>                     Noul >= p is "yes" (default 0.7)
-  --no-at <p>                      Noul <= p is "no" (default 0.3, else uncertain)
-  --act-above <c>                  Choice/Score confidence >= c acts (default 0.8)
-  --review-above <c>               Confidence >= c reviews, else abstains (default 0.5)
+EXIT CODES (execution status)
+  0  success — inference completed, answers on stdout
+  1  usage, transport, or API error
 
-EXIT CODES (shell gating)
-  0  act / yes / no                usable answer
-  2  review / uncertain            needs a human or second opinion
-  3  abstain                       low confidence, do not use
-  1  usage or API error
+Confidence and probabilities are data on stdout. Policy (act/review/abstain,
+yes/no thresholds) belongs in the caller, not the exit code.
 
 GLOBAL OPTIONS
   --api-key <key>                  API key (or TYPESAFE_API_KEY env var, required)
-  --model <id>                     Model (default jev-latest; pin jev-1.13.0 for stable thresholds)
-  --base-url <url>                 API root (or TYPESAFE_BASE_URL, default https://api.typesafe.ai)
-  --timeout <ms>                   Request timeout (default 30000)
-  --retries <n>                    Retries on 429/5xx with backoff (default 3)
+  --model <id>                     Model override (or TYPESAFE_DEFAULT_MODEL, default jev-latest)
+  --base-url <url>                 API root (or TYPESAFE_BASE_URL)
+  --log-level <level>              SDK log level: debug|info|warn|error|off
+  --timeout <ms>                   Request timeout in ms (SDK default 10000)
+  --retries <n>                    Max retries, 0 disables (SDK default 2)
+  --concurrency <n>                Batch concurrency (default 4, max 32)
   -f, --format <json|table>        Output format (default json)
   --true-means <text>              Noul criteria.true: what yes means
   --false-means <text>             Noul criteria.false: what no means
@@ -51,9 +48,10 @@ EXAMPLES
   jev noul "Does this convey urgency?" --state "Payouts failing 3 days, help!"
   cat ticket.txt | jev choice "Which team handles this?" --option billing="Payments" --option technical="Bugs" --stdin
   jev score "How frustrated?" --level "Calm" --level "Frustrated" --level "Angry" --state-file ticket.txt
-  jev ask --state-file ticket.txt --questions pack.json
+  jev ask --state-file ticket.json --state-format json --questions pack.json
+  echo '{"state":"...","questions":{...}}' | jev ask --request -
+  jev batch --request requests.jsonl --concurrency 8
   jev lint --questions pack.json
-  jev eval --questions pack.json --dataset labeled.jsonl
   jev models
 
 DOCS
@@ -65,10 +63,11 @@ DISCLAIMER
   Typed output guarantees the interface, not the truth — validate on your data.
 `;
 
-export const ASK_HELP = `jev ask — Batch questions over one state in a single call
+export const ASK_HELP = `jev ask — Questions over one state in a single call
 
 USAGE
-  jev ask --questions <file> [--state <text> | --state-file <path> | --stdin]
+  jev ask --request <file>                     Full request {"state","questions","model?"}
+  jev ask --questions <file> --state ...       Questions + explicit state
 
 QUESTIONS FILE
   JSON object mapping caller-chosen IDs to questions:
@@ -83,22 +82,25 @@ QUESTIONS FILE
 NOTES
   Questions run in parallel and cannot see each other's answers — state any
   speculative premise explicitly. Extra questions cost tokens but barely add
-  latency. "jev lint" validates the file first. Pin --model to a versioned ID
+  latency. "jev lint" validates the file first. Pin the model to a versioned ID
   (e.g. jev-1.13.0) when thresholds are tuned, since aliases drift.
+  State may be text or structured JSON: use --state-format json for objects/arrays.
 `;
 
-export const EVAL_HELP = `jev eval — Sweep thresholds over a labeled JSONL dataset
+export const BATCH_HELP = `jev batch — Many independent requests from a JSONL file
 
 USAGE
-  jev eval --questions <file> --dataset <file> [--limit <n>]
+  jev batch --request <file.jsonl> [--questions <file>] [--concurrency <n>]
 
-DATASET (one JSON object per line)
-  {"state": "...", "labels": {"qid": <0|1 for noul, "<option>" for choice, <level-index> for score>}}
+INPUT (one JSON object per line)
+  {"id": "row-1", "state": ..., "questions": {...}, "model": "jev-1.13.0"}
+  questions/model may be omitted per record when --questions/--model covers them.
 
-REPORT
-  Per question: accuracy, Brier score, ECE (10 bins), and a threshold sweep
-  suggesting --yes-at / --act-above cutoffs. Tune on your own data; cookbook
-  thresholds are starting points, not rules.
+CONTRACT
+  One result/error record per input record, input order preserved, streamed to
+  stdout as JSON lines: {"id","ok","response"|"error"}. Overall exit is 1 when
+  any record fails. No re-execution of successful records — callers filter and
+  retry the failures themselves.
 `;
 
 export const MODELS_HELP = `jev models — List models available to your key

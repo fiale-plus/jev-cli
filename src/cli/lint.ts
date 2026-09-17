@@ -1,4 +1,4 @@
-import type { Question } from "../api/types.js";
+import type { Questions } from "@typesafe-ai/sdk";
 
 export interface LintIssue {
   qid: string;
@@ -16,10 +16,8 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }
 
-function instructionsText(instructions: unknown): string | null {
-  return typeof instructions === "string" ? instructions : null;
-}
-
+// Structural pre-flight only: shape errors that always fail server-side.
+// Semantic question-design advice lives in the official skill, not here.
 export function lintQuestions(input: unknown): LintResult {
   const issues: LintIssue[] = [];
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
@@ -46,41 +44,18 @@ export function lintQuestions(input: unknown): LintResult {
       continue;
     }
 
-    const text = instructionsText(q.instructions);
-    if (text !== null) {
-      if (!isNonEmptyString(text)) {
-        issues.push({ qid, severity: "error", message: "instructions string is empty" });
-      } else {
-        // IDs are for code only — never sent to the model. Instructions that
-        // parrot the ID (or say almost nothing) silently lose meaning.
-        if (text.trim() === qid) {
-          issues.push({ qid, severity: "error", message: "instructions equal the question id, which is never sent to the model — write the full judgment" });
-        }
-        if (text.trim().length < 10) {
-          issues.push({ qid, severity: "warn", message: "instructions look too short to be a complete judgment (<10 chars)" });
-        }
-      }
-    } else if (q.instructions === undefined || q.instructions === null) {
-      issues.push({ qid, severity: "error", message: "instructions is required" });
+    if (q.instructions === undefined || q.instructions === null) {
+      issues.push({ qid, severity: "error", message: "instructions is required (string, object, or array)" });
+    } else if (typeof q.instructions === "string" && !isNonEmptyString(q.instructions)) {
+      issues.push({ qid, severity: "error", message: "instructions string is empty" });
     }
 
     if (type === "choice") {
       const c = q.criteria as Record<string, unknown> | undefined;
       if (typeof c !== "object" || c === null || Array.isArray(c)) {
         issues.push({ qid, severity: "error", message: "choice criteria must be a map of option -> description (use null when an option needs no detail)" });
-      } else {
-        const names = Object.keys(c);
-        if (names.length < 2) {
-          issues.push({ qid, severity: "error", message: `choice needs at least 2 options, found ${names.length} (single-outcome checks are a noul)` });
-        }
-        for (const name of names) {
-          if (name.trim().length === 0) issues.push({ qid, severity: "error", message: "choice has an empty option name" });
-          if (c[name] === undefined) issues.push({ qid, severity: "error", message: `choice option "${name}" must map to a description or null, not undefined` });
-          else if (c[name] === null) issues.push({ qid, severity: "warn", message: `choice option "${name}" has no description — add one when options are confusable` });
-          else if (typeof c[name] !== "string" && typeof c[name] !== "object") {
-            issues.push({ qid, severity: "error", message: `choice option "${name}" description must be a string, object, array, or null` });
-          }
-        }
+      } else if (Object.keys(c).length < 2) {
+        issues.push({ qid, severity: "error", message: `choice needs at least 2 options, found ${Object.keys(c).length} (single-outcome checks are a noul)` });
       }
     }
 
@@ -88,17 +63,8 @@ export function lintQuestions(input: unknown): LintResult {
       const c = q.criteria as unknown;
       if (!Array.isArray(c)) {
         issues.push({ qid, severity: "error", message: "score criteria must be an ordered array of level descriptions, lowest first" });
-      } else {
-        if (c.length < 2) {
-          issues.push({ qid, severity: "error", message: `score needs at least 2 levels, found ${c.length}` });
-        }
-        c.forEach((level, i) => {
-          if (typeof level === "string" && level.trim().length === 0) {
-            issues.push({ qid, severity: "error", message: `score level ${i} is an empty string` });
-          } else if (level === null || level === undefined) {
-            issues.push({ qid, severity: "error", message: `score level ${i} is empty — every level must describe a concrete situation` });
-          }
-        });
+      } else if (c.length < 2) {
+        issues.push({ qid, severity: "error", message: `score needs at least 2 levels, found ${c.length}` });
       }
     }
 
@@ -113,11 +79,11 @@ export function lintQuestions(input: unknown): LintResult {
   return { ok: !issues.some((i) => i.severity === "error"), issues, questionCount: entries.length };
 }
 
-export function coerceQuestions(input: unknown): Record<string, Question> {
+export function coerceQuestions(input: unknown): Questions {
   const lint = lintQuestions(input);
   if (!lint.ok) {
     const first = lint.issues.find((i) => i.severity === "error");
     throw new Error(`Invalid questions${first?.qid ? ` (${first.qid})` : ""}: ${first?.message}`);
   }
-  return input as Record<string, Question>;
+  return input as Questions;
 }

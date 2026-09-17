@@ -1,9 +1,13 @@
-import type { AnnotatedResponse } from "../api/types.js";
+import type { Questions, SystemOneResult } from "@typesafe-ai/sdk";
 import { estimateCostUsd } from "../api/client.js";
 
 export type OutputFormat = "json" | "table";
 
-export function formatOutput(response: AnnotatedResponse, format: OutputFormat): string {
+function formatNumber(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : String(value);
+}
+
+export function formatOutput(response: SystemOneResult<Questions>, format: OutputFormat): string {
   if (format === "json") {
     const enriched = {
       ...response,
@@ -18,22 +22,26 @@ export function formatOutput(response: AnnotatedResponse, format: OutputFormat):
   }
   return formatTable(response);
 }
-
-function formatTable(response: AnnotatedResponse): string {
+function formatTable(response: SystemOneResult<Questions>): string {
   const lines: string[] = [`model: ${response.model}`];
-  for (const [id, ans] of Object.entries(response.answers)) {
+  const answers = response.answers as unknown as Record<string, { type: string } & Record<string, unknown>>;
+  for (const [id, ans] of Object.entries(answers)) {
     if (ans.type === "noul") {
-      lines.push(`${id}: noul=${ans.noul.toFixed(3)} verdict=${ans.verdict}`);
+      lines.push(`${id}: noul=${formatNumber(ans.noul)}`);
     } else if (ans.type === "choice") {
-      lines.push(`${id}: choice=${ans.choice} confidence=${ans.confidence.toFixed(3)} action=${ans.action}`);
-      for (const [opt, p] of Object.entries(ans.probabilities)) {
-        lines.push(`  ${opt}: ${Number(p).toFixed(3)}`);
+      lines.push(`${id}: choice=${String(ans.choice)} confidence=${formatNumber(ans.confidence)}`);
+      const probs = ans.probabilities as Record<string, unknown> | undefined;
+      for (const [opt, p] of Object.entries(probs ?? {})) {
+        lines.push(`  ${opt}: ${formatNumber(p)}`);
+      }
+    } else if (ans.type === "score") {
+      lines.push(`${id}: score=${formatNumber(ans.score)} confidence=${formatNumber(ans.confidence)}`);
+      const probs = ans.probabilities as Record<string, unknown> | undefined;
+      for (const [level, p] of Object.entries(probs ?? {})) {
+        lines.push(`  [${level}]: ${formatNumber(p)}`);
       }
     } else {
-      lines.push(`${id}: score=${ans.score.toFixed(3)} confidence=${ans.confidence.toFixed(3)} action=${ans.action}`);
-      for (const [level, p] of Object.entries(ans.probabilities)) {
-        lines.push(`  [${level}] ${ans.legend[level] ?? ""}: ${Number(p).toFixed(3)}`);
-      }
+      lines.push(`${id}: ${JSON.stringify(ans)}`);
     }
   }
   lines.push(

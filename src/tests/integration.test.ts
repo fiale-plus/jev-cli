@@ -41,14 +41,15 @@ describe("CLI integration (offline)", () => {
     assert.match(stdout.trim(), /^\d+\.\d+\.\d+/);
   });
 
-  it("shows ask help with just 'ask'", async () => {
-    const { stdout } = await run(["ask"]);
-    assert.ok(stdout.includes("jev ask"));
+  it("errors when ask has no request source", async () => {
+    const { stderr } = await run(["ask", "--state", "ticket"]);
+    assert.ok(stderr.includes("Missing questions"));
   });
 
-  it("shows eval help with just 'eval'", async () => {
-    const { stdout } = await run(["eval"]);
-    assert.ok(stdout.includes("jev eval"));
+  it("documents batch contract in help", async () => {
+    const { stdout } = await run(["batch", "--help"]);
+    assert.ok(stdout.includes("jev batch"));
+    assert.ok(stdout.includes("input order preserved"));
   });
 
   it("errors on unknown command", async () => {
@@ -56,12 +57,14 @@ describe("CLI integration (offline)", () => {
     assert.ok(stderr.includes("Unknown command"));
   });
 
+  it("rejects misspelled flags loudly", async () => {
+    const { stderr } = await run(["models", "--modle", "x"]);
+    assert.ok(stderr.toLowerCase().includes("unknown"));
+  });
+
   it("errors without API key on live commands", async () => {
-    const env = { ...process.env };
-    delete env.TYPESAFE_API_KEY;
     const { stderr } = await run(["models"], { TYPESAFE_API_KEY: "" });
     assert.ok(stderr.includes("Missing API key") || stderr.includes("Error"));
-    void env;
   });
 
   it("rejects invalid format", async () => {

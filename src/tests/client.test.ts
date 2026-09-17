@@ -1,10 +1,11 @@
 import { describe, it, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
-import { JevClient, JevApiError, estimateCostUsd } from "../api/client.js";
+import { APIError, TypeSafeClient } from "@typesafe-ai/sdk";
+import { createClient, estimateCostUsd, systemOne } from "../api/client.js";
 import {
   SYSTEM_ONE_RESPONSE,
   MIXED_RESPONSE,
-  MODELS_RESPONSE,
+  MODELS_WIRE,
 } from "./fixtures/systemone.js";
 
 interface MockCall {
@@ -15,26 +16,31 @@ interface FetchMock {
   mock: { calls: MockCall[] };
 }
 
-let client: JevClient;
 let fetchMock: FetchMock;
+
 interface MockResponseShape {
   ok: boolean;
   status: number;
-  headers: { get(name: string): string | null };
+  headers: Headers;
   json(): Promise<unknown>;
   text(): Promise<string>;
 }
 
 type MockFetchFn = (...args: unknown[]) => Promise<MockResponseShape>;
 
+function headersWith(values: Record<string, string>): Headers {
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(values)) headers.set(k, v);
+  return headers;
+}
+
 function mockFetch(response: unknown, status = 200, headers: Record<string, string> = {}) {
-  const fn: MockFetchFn = async () => ({
-    ok: status >= 200 && status < 300,
-    status,
-    headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
-    json: async () => response,
-    text: async () => JSON.stringify(response),
-  });
+  const body = JSON.stringify(response);
+  const fn: MockFetchFn = async () =>
+    new Response(body, {
+      status,
+      headers: headersWith({ "content-type": "application/json", ...headers }),
+    }) as MockResponseShape;
   fetchMock = mock.fn(fn);
   globalThis.fetch = fetchMock as unknown as typeof fetch;
 }
@@ -65,19 +71,22 @@ function getCalledBody(): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-describe("JevClient", () => {
+describe("SDK-backed transport", () => {
   beforeEach(() => {
-    client = new JevClient("test-key", { maxRetries: 0 });
+    delete process.env.TYPESAFE_BASE_URL;
+    delete process.env.TYPESAFE_DEFAULT_MODEL;
   });
 
   afterEach(() => {
     mock.restoreAll();
+    delete process.env.TYPESAFE_BASE_URL;
+    delete process.env.TYPESAFE_DEFAULT_MODEL;
   });
 
   describe("request mechanics", () => {
     it("POSTs state+model+questions to /v1/systemone", async () => {
       mockFetch(SYSTEM_ONE_RESPONSE);
-      await client.systemOne("some state", {
+      await systemOne({ apiKey: "test-key" }, "some state", {
         q: { type: "noul", instructions: "Is it urgent?" },
       });
       assert.equal(getCalledUrl(), "https://api.typesafe.ai/v1/systemone");
@@ -88,72 +97,62 @@ describe("JevClient", () => {
       assert.deepEqual(body.questions, { q: { type: "noul", instructions: "Is it urgent?" } });
     });
 
-    it("sends Bearer auth and jev-cli User-Agent", async () => {
+    it("sends Bearer auth", async () => {
       mockFetch(SYSTEM_ONE_RESPONSE);
-      await client.systemOne("s", { q: { type: "noul", instructions: "x?" } });
+      await systemOne({ apiKey: "test-key" }, "s", { q: { type: "noul", instructions: "x?" } });
       const headers = getCalledOptions().headers;
-      if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
-        throw new Error("expected headers object");
+      if (!(headers instanceof Headers)) {
+        const h = headers as Record<string, unknown>;
+        assert.equal(h.Authorization, "Bearer test-key");
+        return;
       }
-      const h: Record<string, unknown> = headers as Record<string, unknown>;
-      assert.equal(h.Authorization, "Bearer test-key");
-      assert.equal(h["User-Agent"], "jev-cli");
-      assert.equal(h["Content-Type"], "application/json");
+      assert.equal(headers.get("authorization"), "Bearer test-key");
     });
 
     it("passes structured state through untouched", async () => {
       mockFetch(MIXED_RESPONSE);
       const state = { ticket: { text: "x", priority: 1 }, tags: ["a"] };
-      await client.systemOne(state, { q: { type: "noul", instructions: "x?" } });
+      await systemOne({ apiKey: "test-key" }, state, { q: { type: "noul", instructions: "x?" } });
       assert.deepEqual(getCalledBody().state, state);
     });
 
     it("honors TYPESAFE_BASE_URL override", async () => {
       process.env.TYPESAFE_BASE_URL = "https://proxy.example.com";
-      try {
-        const c = new JevClient("k", { maxRetries: 0 });
-        mockFetch(SYSTEM_ONE_RESPONSE);
-        await c.systemOne("s", { q: { type: "noul", instructions: "x?" } });
-        assert.ok(getCalledUrl().startsWith("https://proxy.example.com/v1/systemone"));
-      } finally {
-        delete process.env.TYPESAFE_BASE_URL;
-      }
+      mockFetch(SYSTEM_ONE_RESPONSE);
+      await systemOne({ apiKey: "k" }, "s", { q: { type: "noul", instructions: "x?" } });
+      assert.ok(getCalledUrl().startsWith("https://proxy.example.com/v1/systemone"));
     });
 
-    it("GETs /v1/models for listModels", async () => {
-      mockFetch(MODELS_RESPONSE);
-      const out = await client.listModels();
+    it("honors explicit model override", async () => {
+      mockFetch(SYSTEM_ONE_RESPONSE);
+      await systemOne({ apiKey: "k", model: "jev-1.13.0" }, "s", { q: { type: "noul", instructions: "x?" } });
+      assert.equal(getCalledBody().model, "jev-1.13.0");
+    });
+
+    it("lists models through the SDK resource", async () => {
+      mockFetch(MODELS_WIRE);
+      const client = createClient({ apiKey: "k" });
+      assert.ok(client instanceof TypeSafeClient);
+      const out = await client.models.list();
       assert.equal(getCalledUrl(), "https://api.typesafe.ai/v1/models");
       assert.equal(getCalledOptions().method, "GET");
-      assert.equal(out.models.length, 2);
+      assert.equal(out.length, 2);
     });
 
-    it("throws JevApiError with status on 400", async () => {
+    it("surfaces API errors with status", async () => {
       mockFetch({ message: "bad questions" }, 400);
-      await assert.rejects(() => client.systemOne("s", {}), (err: unknown) => {
-        assert.ok(err instanceof JevApiError);
-        if (err instanceof JevApiError) assert.equal(err.status, 400);
-        return true;
-      });
+      await assert.rejects(
+        systemOne({ apiKey: "k" }, "s", { q: { type: "noul", instructions: "x?" } }),
+        (err: unknown) => {
+          assert.ok(err instanceof APIError);
+          if (err instanceof APIError) assert.equal(err.status, 400);
+          return true;
+        },
+      );
     });
-
-    it("retries 429 then succeeds", async () => {
-      const c = new JevClient("k", { maxRetries: 2, timeout: 5000 });
-      let calls = 0;
-      const fn: MockFetchFn = async (): Promise<MockResponseShape> => {
-        calls++;
-        if (calls === 1) {
-          return { ok: false, status: 429, headers: { get: () => "0" }, text: async () => "slow down", json: async () => ({}) };
-        }
-        return {
-          ok: true, status: 200, headers: { get: () => null },
-          json: async () => SYSTEM_ONE_RESPONSE, text: async () => "{}",
-        };
-      };
-      fetchMock = mock.fn(fn);
-      globalThis.fetch = fn as typeof fetch;
-      const out = await c.systemOne("s", { q: { type: "noul", instructions: "x?" } });
-      assert.equal(calls, 2);
+    it("accepts maxRetries 0 without local validation errors", async () => {
+      mockFetch(SYSTEM_ONE_RESPONSE);
+      const out = await systemOne({ apiKey: "k", maxRetries: 0 }, "s", { q: { type: "noul", instructions: "x?" } });
       assert.equal(out.model, "jev-1.13.0");
     });
   });

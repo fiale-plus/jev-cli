@@ -1,33 +1,33 @@
 # jev-cli
 
-Unofficial CLI + TypeScript client for the TypeSafe System One API (Jev).
+Unofficial CLI over the official TypeSafe SDK (`@typesafe-ai/sdk`).
 
 ## Build & Test
 
 ```bash
 npm run build              # tsc -> dist/
-npm test                   # unit tests (mocked HTTP)
+npm test                   # unit tests (mocked fetch with real Response)
 npm run test:integration   # offline CLI tests (help, lint, validation — no key needed)
 npm run dev -- <args>      # run CLI directly via tsx
 ```
 
+Requires Node.js >= 20 (matches the official SDK).
+
 ## Architecture
 
-- `src/api/client.ts` — `JevClient` class, native `fetch`, POST `/v1/systemone` + GET `/v1/models`, retries 429/5xx with `retry-after`
-- `src/api/types.ts` — request/response shapes mirroring https://docs.typesafe.ai/api; annotations (`verdict`/`action`) are CLI-local
-- `src/commands/single.ts` — `noul`/`choice`/`score` one-shot builders
-- `src/commands/batch.ts` — `ask` (parallel batch), `lint` (offline validation), `models`
-- `src/commands/eval.ts` — `eval` threshold sweep over labeled JSONL (accuracy/Brier/ECE)
-- `src/cli/` — parseArgs configs, gates (threshold→verdict/action→exit code), lint rules, formatters (json/table), help text
-- `src/utils/` — `resolveApiKey` (flag > `TYPESAFE_API_KEY`), state readers (inline/file/stdin/positional), numeric parsing
+- `src/api/client.ts` — thin wrapper: `createClient`/`systemOne` over `TypeSafeClient`, cost estimate
+- `src/commands/requests.ts` — `noul`/`choice`/`score`/`ask` request builders (same upstream shape)
+- `src/commands/ops.ts` — `batch` (bounded-concurrency JSONL), `lint` (structural only), `models`
+- `src/cli/` — strict parseArgs, structural lint, formatters (json/table), help text
+- `src/utils/` — `resolveApiKey` (flag > `TYPESAFE_API_KEY`), state readers (text/json, single source), numeric parsing
 - `src/tests/` — node:test runner, fixtures in `tests/fixtures/`
 
 ## Conventions
 
-- Zero runtime dependencies (Node 18+ native fetch, parseArgs, test runner)
+- Official SDK owns transport, retries, errors, types — never duplicate
 - ESM (`"type": "module"`) with `.js` import extensions
 - API speaks camelCase bodies; CLI flags use kebab-case
-- Thresholds live in code, never sent to the API; JSON output carries `cost.estimated_usd` (input $42/Btok, output free)
-- Exit codes: 0 act/yes/no, 2 review/uncertain, 3 abstain, 1 error
-- Tests mock `global.fetch` — no external mock libraries
-- Node 18 compat: executor-form promises (no `Promise.withResolvers`), ES2022 lib
+- Successful inference exits 0; policy lives in the caller
+- Tests mock `global.fetch` with real `Response` objects (SDK clones responses)
+- Structural lint only; question-design advice lives in the official skill
+- No eval/calibration in core; no threshold flags; no exit-code gating

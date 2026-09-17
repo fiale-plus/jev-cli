@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 
-import { JevClient, JevApiError } from "./api/client.js";
+import { APIError, TypeSafeError } from "@typesafe-ai/sdk";
 import { parseGlobal, extractGlobalOpts } from "./cli/parseArgs.js";
 import type { OutputFormat } from "./cli/formatters.js";
-import { ASK_HELP, EVAL_HELP, MAIN_HELP, MODELS_HELP } from "./cli/help.js";
+import { ASK_HELP, BATCH_HELP, MAIN_HELP, MODELS_HELP } from "./cli/help.js";
 import { resolveApiKey } from "./utils/validation.js";
-import { handleAsk, handleLint, handleModels } from "./commands/batch.js";
-import { handleEval } from "./commands/eval.js";
-import { handleChoice, handleNoul, handleScore, clientOpts } from "./commands/single.js";
+import { handleBatch, handleLint, handleModels } from "./commands/ops.js";
+import { clientOpts, handleAsk, handleChoice, handleNoul, handleScore } from "./commands/requests.js";
 
 const VERSION = "0.0.0-dev";
 
@@ -19,25 +18,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  const command = argv[0];
-
-  if (command === "--help" || command === "-h") {
-    process.stdout.write(MAIN_HELP);
-    return;
-  }
-
-  if (command === "--version" || command === "-v") {
-    process.stdout.write(VERSION + "\n");
-    return;
-  }
-
   const parsed = parseGlobal(argv);
   const global = extractGlobalOpts(parsed.values as Record<string, unknown>);
   const format = global.format as OutputFormat;
 
   if (global.help) {
+    const [command] = parsed.positionals as string[];
     if (command === "ask") process.stdout.write(ASK_HELP);
-    else if (command === "eval") process.stdout.write(EVAL_HELP);
+    else if (command === "batch") process.stdout.write(BATCH_HELP);
     else if (command === "models") process.stdout.write(MODELS_HELP);
     else process.stdout.write(MAIN_HELP);
     return;
@@ -58,9 +46,8 @@ async function main(): Promise<void> {
       return;
 
     case "models": {
-      const apiKey = resolveApiKey(global.apiKey);
-      const client = new JevClient(apiKey, clientOpts(global));
-      await handleModels(client, format);
+      const opts = clientOpts(global, resolveApiKey(global.apiKey));
+      await handleModels(opts, format);
       return;
     }
 
@@ -68,14 +55,13 @@ async function main(): Promise<void> {
     case "choice":
     case "score":
     case "ask":
-    case "eval": {
-      const apiKey = resolveApiKey(global.apiKey);
-      const client = new JevClient(apiKey, clientOpts(global));
-      if (group === "noul") await handleNoul(restArgs, global, client, format);
-      else if (group === "choice") await handleChoice(restArgs, global, client, format);
-      else if (group === "score") await handleScore(restArgs, global, client, format);
-      else if (group === "ask") await handleAsk(global, client, format);
-      else await handleEval(global, client);
+    case "batch": {
+      const opts = clientOpts(global, resolveApiKey(global.apiKey));
+      if (group === "noul") await handleNoul(restArgs, global, opts, format);
+      else if (group === "choice") await handleChoice(restArgs, global, opts, format);
+      else if (group === "score") await handleScore(restArgs, global, opts, format);
+      else if (group === "ask") await handleAsk(global, opts, format);
+      else await handleBatch(global, opts, format);
       return;
     }
 
@@ -88,7 +74,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  if (err instanceof JevApiError) {
+  // Exit codes are execution status: 1 for usage/transport/API errors.
+  // Successful inference always exits 0 — confidence is data for the caller.
+  if (err instanceof APIError) {
+    process.stderr.write(`Error: TypeSafe API error ${err.status}: ${err.message}\n`);
+    if (err.requestId) process.stderr.write(`request-id: ${err.requestId}\n`);
+  } else if (err instanceof TypeSafeError) {
     process.stderr.write(`Error: ${err.message}\n`);
   } else if (err instanceof Error) {
     process.stderr.write(`Error: ${err.message}\n`);
