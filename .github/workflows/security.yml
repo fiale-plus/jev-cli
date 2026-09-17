@@ -1,0 +1,44 @@
+name: Security Audit
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Monday 9am UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Audit all dependencies (moderate+)
+        run: npm audit --audit-level=moderate || true
+
+      - name: Audit production dependencies (high+)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Check outdated dependencies
+        run: npm outdated || true
+
+      - name: Save audit report
+        if: always()
+        run: |
+          mkdir -p audit-reports
+          npm audit --json > audit-reports/audit.json || true
+          npm outdated --json > audit-reports/outdated.json || true
+
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-reports
+          path: audit-reports/
+          retention-days: 30
