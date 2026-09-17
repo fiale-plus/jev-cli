@@ -32,7 +32,7 @@ jev models
 
 Get a key at: https://console.typesafe.ai/settings/keys
 
-Requires Node.js >= 20.0.0 (matches the official SDK).
+Requires Node.js >= 22.0.0.
 
 ## CLI Usage
 

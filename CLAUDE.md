@@ -11,7 +11,7 @@ npm run test:integration   # offline CLI tests (help, lint, validation — no ke
 npm run dev -- <args>      # run CLI directly via tsx
 ```
 
-Requires Node.js >= 20 (matches the official SDK).
+Requires Node.js >= 22.
 
 ## Architecture
 

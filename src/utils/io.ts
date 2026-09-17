@@ -43,7 +43,6 @@ export async function readState(opts: StateSource & { extra: string[] }): Promis
 }
 
 export function readStdin(): Promise<string> {
-  // Executor form (not Promise.withResolvers): Node 18 compat per engines.
   return new Promise((resolve, reject) => {
     let data = "";
     process.stdin.setEncoding("utf8");
