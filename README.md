@@ -1,5 +1,10 @@
 # @fiale-plus/jev-cli
 
+[![NPM Version](https://img.shields.io/npm/v/@fiale-plus/jev-cli?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/jev-cli)
+[![NPM Downloads](https://img.shields.io/npm/dm/@fiale-plus/jev-cli?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/jev-cli)
+[![Test Status](https://img.shields.io/github/actions/workflow/status/fiale-plus/jev-cli/test.yml?branch=main&label=tests&style=flat-square)](https://github.com/fiale-plus/jev-cli/actions/workflows/test.yml)
+[![License](https://img.shields.io/github/license/fiale-plus/jev-cli?style=flat-square)](LICENSE)
+
 **Unofficial** CLI for the [TypeSafe System One API](https://docs.typesafe.ai/api) (Jev) — designed for AI agents and anything that can execute a process.
 
 Jev is TypeSafe's System One model: send `state` + typed questions, get structured answers (`noul`/`choice`/`score` with probabilities + confidence) your code can branch on. No text generation, no parsing.
@@ -7,8 +12,6 @@ Jev is TypeSafe's System One model: send `state` + typed questions, get structur
 Transport, retries, and types come from the official [`@typesafe-ai/sdk`](https://docs.typesafe.ai/sdk/javascript). This CLI adds the shell interface: explicit input, machine-readable output, and execution exit codes.
 
 ## Why a CLI when SDKs exist?
-
-The SDKs cover in-process calls. This CLI covers everything with a subprocess:
 
 - **Shell composability** — pipes, `jq`, JSONL batch, documented exit codes
 - **Question files as reviewable artifacts** — one JSON file holds questions; `lint` validates structure without spending API calls
