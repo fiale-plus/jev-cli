@@ -56,15 +56,15 @@ jobs:
       - name: Report what to approve
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          npm stage list @fiale-plus/jev-cli || true
           {
             echo "### Staged @fiale-plus/jev-cli@$VERSION"
             echo
-            echo "Approve with 2FA to move it to prod:"
+            echo "The stage id is in the output of the step above. Approve with 2FA to move it to prod:"
             echo
             echo '```'
             echo "npm stage approve <stage-id>"
             echo '```'
             echo
-            echo "Or use the Staged Packages tab on npmjs.com."
+            echo "Or use the Staged Packages tab on npmjs.com. Listing staged packages needs a"
+            echo "user token, so this workflow cannot print the list itself."
           } >> "$GITHUB_STEP_SUMMARY"
