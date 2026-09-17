@@ -1,0 +1,14 @@
+{
+  "policy_version": 1,
+  "name": "verify-strict",
+  "mode": "all",
+  "rules": [
+    {
+      "answer": "relation",
+      "type": "choice",
+      "accept": ["supports"],
+      "accept_at": 0.95,
+      "review_at": 0.75
+    }
+  ]
+}

@@ -14,6 +14,8 @@
   },
   "files": [
     "dist/",
+    "packs/",
+    "examples/",
     "README.md",
     "LICENSE"
   ],
@@ -40,15 +42,17 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
+    "evaluate": "npm run build && node tools/evaluate.mjs",
     "prepublishOnly": "npm run build && npm test",
     "prepare": "npm run build",
+    "stub": "node tools/stub-server.mjs",
     "test": "tsx --test src/tests/*.test.ts",
     "test:integration": "tsx --test src/tests/integration.test.ts",
     "test:watch": "tsx --test --watch src/tests/*.test.ts"
   },
   "type": "module",
   "types": "dist/index.d.ts",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
   }

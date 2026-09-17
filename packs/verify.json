@@ -1,0 +1,34 @@
+{
+  "pack_version": 1,
+  "name": "verify",
+  "description": "Check a claim against the evidence it cites. One Choice question returns supports / contradicts / says_nothing.",
+  "state_contract": {
+    "claim": "The claim being checked (string).",
+    "evidence": "The source text the claim rests on (string, object, or array)."
+  },
+  "questions": {
+    "relation": {
+      "type": "choice",
+      "instructions": "How does the evidence relate to the claim?",
+      "criteria": {
+        "supports": "The evidence states the claim or directly implies that it is true",
+        "contradicts": "The evidence states the opposite of the claim, or implies that it is false",
+        "says_nothing": "The evidence does not address what the claim asserts, either way"
+      }
+    }
+  },
+  "policy": {
+    "policy_version": 1,
+    "name": "verify",
+    "mode": "all",
+    "rules": [
+      {
+        "answer": "relation",
+        "type": "choice",
+        "accept": ["supports"],
+        "accept_at": 0.8,
+        "review_at": 0.5
+      }
+    ]
+  }
+}

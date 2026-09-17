@@ -4,12 +4,26 @@ import { APIError, TypeSafeError } from "@typesafe-ai/sdk";
 import { parseGlobal, extractGlobalOpts } from "./cli/parseArgs.js";
 import type { OutputFormat } from "./cli/formatters.js";
 import { formatJsonError } from "./cli/formatters.js";
-import { ASK_HELP, BATCH_HELP, MAIN_HELP, MODELS_HELP } from "./cli/help.js";
+import { ASK_HELP, BATCH_HELP, DOCTOR_HELP, GATE_HELP, MAIN_HELP, MODELS_HELP, PACKS_HELP, REPLAY_HELP } from "./cli/help.js";
 import { resolveApiKey } from "./utils/validation.js";
+import { cliVersion } from "./utils/package.js";
 import { handleBatch, handleLint, handleModels } from "./commands/ops.js";
+import type { ClientOpts } from "./api/client.js";
 import { clientOpts, handleAsk, handleChoice, handleNoul, handleScore } from "./commands/requests.js";
+import { handleGate } from "./commands/gate.js";
+import { handleReplay } from "./commands/replay.js";
+import { handlePacks } from "./commands/packs.js";
+import { handleDoctor } from "./commands/doctor.js";
 
-const VERSION = "0.1.0";
+const HELP_BY_COMMAND: Record<string, string> = {
+  ask: ASK_HELP,
+  batch: BATCH_HELP,
+  models: MODELS_HELP,
+  gate: GATE_HELP,
+  replay: REPLAY_HELP,
+  packs: PACKS_HELP,
+  doctor: DOCTOR_HELP,
+};
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -26,14 +40,13 @@ async function main(): Promise<void> {
 
   if (global.help) {
     const [command] = parsed.positionals as string[];
-    const text = command === "ask" ? ASK_HELP : command === "batch" ? BATCH_HELP : command === "models" ? MODELS_HELP : MAIN_HELP;
     // --help goes to stdout (it IS the output); unknown commands go to stderr.
-    process.stdout.write(text);
+    process.stdout.write((command !== undefined ? HELP_BY_COMMAND[command] : undefined) ?? MAIN_HELP);
     return;
   }
 
   if (global.version) {
-    process.stdout.write(VERSION + "\n");
+    process.stdout.write(cliVersion() + "\n");
     return;
   }
 
@@ -45,6 +58,32 @@ async function main(): Promise<void> {
     case "lint":
       await handleLint(global);
       return;
+
+    // Offline commands: no API key required, so policies and records can be
+    // evaluated in CI and in environments that must not hold a key.
+    case "gate":
+      await handleGate(global, format);
+      return;
+
+    case "replay":
+      await handleReplay(global, format);
+      return;
+
+    case "packs":
+      handlePacks(restArgs, format);
+      return;
+
+    case "doctor": {
+      // Doctor reports a missing key instead of failing on it.
+      let opts: ClientOpts | undefined;
+      try {
+        opts = clientOpts(global, resolveApiKey(global.apiKey));
+      } catch {
+        opts = undefined;
+      }
+      await handleDoctor(global, opts, format);
+      return;
+    }
 
     case "models": {
       const opts = clientOpts(global, resolveApiKey(global.apiKey));

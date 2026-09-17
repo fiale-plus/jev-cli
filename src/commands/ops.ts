@@ -2,12 +2,13 @@ import { createClient } from "../api/client.js";
 import type { ClientOpts } from "../api/client.js";
 import type { GlobalOptions } from "../cli/parseArgs.js";
 import type { OutputFormat } from "../cli/formatters.js";
-import { formatOutput } from "../cli/formatters.js";
+import { formatOutput, enrichResponse } from "../cli/formatters.js";
 import type { Questions } from "@typesafe-ai/sdk";
 import { parsePositiveInt } from "../utils/validation.js";
 import { readJsonFile, readJsonlStream } from "../utils/io.js";
 import { coerceQuestions, lintQuestions } from "../cli/lint.js";
 import { abortSignal } from "./requests.js";
+import { loadPack } from "./packs.js";
 
 interface SettledRow {
   index: number;
@@ -32,7 +33,7 @@ export async function handleBatch(global: GlobalOptions, opts: ClientOpts, forma
   const concurrency = global.concurrency === undefined ? 4 : parsePositiveInt(global.concurrency, "--concurrency", 1, 32);
   if (concurrency < 1) throw new Error(`Invalid --concurrency: "${global.concurrency}". Expected an integer in [1, 32].`);
   const signal = abortSignal();
-  const client = createClient({ ...opts, ...(signal !== undefined ? { signal } : {}) });
+  const client = createClient(opts);
 
   const inFlight = new Map<number, Promise<SettledRow>>();
   const buffered = new Map<number, SettledRow>();
@@ -42,12 +43,17 @@ export async function handleBatch(global: GlobalOptions, opts: ClientOpts, forma
 
   async function runOne(index: number, id: unknown, state: unknown, questions: Questions, model: string | undefined): Promise<SettledRow> {
     try {
-      const response = await client.systemOne({
-        state: state as never,
-        questions,
-        ...(model !== undefined ? { model } : {}),
-      });
-      return { index, id, ok: true, response: format === "json" ? response : formatOutput(response, format) };
+      const response = await client.systemOne(
+        {
+          state: state as never,
+          questions,
+          ...(model !== undefined ? { model } : {}),
+        },
+        { ...(signal !== undefined ? { signal } : {}) },
+      );
+      // JSON rows carry the same enrichment a single call does (cost included);
+      // table rows carry the rendered block.
+      return { index, id, ok: true, response: format === "json" ? enrichResponse(response) : formatOutput(response, format) };
     } catch (err) {
       return { index, id, ok: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -130,6 +136,27 @@ export async function handleBatch(global: GlobalOptions, opts: ClientOpts, forma
 }
 
 export async function handleLint(global: GlobalOptions): Promise<void> {
+  // A pack is linted on load (questions and policy both), so --pack reports the
+  // pack identity rather than a per-question list.
+  if (global.pack !== undefined) {
+    if (global.questions !== undefined) {
+      throw new Error("Conflicting inputs: --pack and --questions. Lint one at a time.");
+    }
+    const { pack, hash, path } = loadPack(global.pack);
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ok: true,
+          pack: { name: pack.name, pack_version: pack.pack_version, hash, path },
+          questionCount: Object.keys(pack.questions).length,
+          ruleCount: pack.policy.rules.length,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
   if (!global.questions) throw new Error("Missing --questions <file>: jev lint --questions pack.json.");
   const result = lintQuestions(readJsonFile(global.questions));
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");

@@ -19,6 +19,11 @@ export interface GlobalOptions {
   timeout?: string;
   retries?: string;
   concurrency?: string;
+  pack?: string;
+  policy?: string;
+  input?: string;
+  record?: string;
+  live: boolean;
   help: boolean;
   version: boolean;
 }
@@ -42,6 +47,11 @@ const OPTIONS = {
   timeout: { type: "string" as const },
   retries: { type: "string" as const },
   concurrency: { type: "string" as const },
+  pack: { type: "string" as const },
+  policy: { type: "string" as const },
+  input: { type: "string" as const },
+  record: { type: "string" as const },
+  live: { type: "boolean" as const, default: false },
   help: { type: "boolean" as const, default: false },
   version: { type: "boolean" as const, default: false },
 };
@@ -83,6 +93,11 @@ export function extractGlobalOpts(values: Record<string, unknown>): GlobalOption
     timeout: values.timeout as string | undefined,
     retries: values.retries as string | undefined,
     concurrency: values.concurrency as string | undefined,
+    pack: values.pack as string | undefined,
+    policy: values.policy as string | undefined,
+    input: values.input as string | undefined,
+    record: values.record as string | undefined,
+    live: (values.live as boolean) || false,
     help: (values.help as boolean) || false,
     version: (values.version as boolean) || false,
   };

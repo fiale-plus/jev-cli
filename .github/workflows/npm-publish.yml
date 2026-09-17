@@ -1,5 +1,9 @@
 name: Publish to npm
 
+# Staged publishing: the workflow submits the tarball, a maintainer approves it
+# with 2FA. Trusted publishers created after 2026-09-03 are staging-only, so
+# "npm publish" is rejected by the registry even with a valid OIDC token — the
+# supported path is "npm stage publish" plus manual approval.
 on:
   release:
     types: [published]
@@ -19,26 +23,47 @@ jobs:
         with:
           node-version: 24.x
           registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
+          package-manager-cache: false
+
+      # Staged publishing needs npm >= 11.15.0; the version bundled with Node may
+      # be older (11.6.x rejects "npm stage" as an unknown command).
+      - name: Ensure a staging-capable npm CLI
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # The release tag is the source of truth for what users install. A mismatch
+      # is a hard failure: silently rewriting the version ships an unreviewed tree.
+      - name: Check the tag matches the committed version
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $VERSION. Tag v$VERSION or bump the package."
+            exit 1
+          fi
+          echo "Staging @fiale-plus/jev-cli@$VERSION"
 
       - run: npm ci
-
-      - name: Set version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          CURRENT="$(node -p "require('./package.json').version")"
-          if [ "$CURRENT" != "$VERSION" ]; then npm version "$VERSION" --no-git-tag-version; fi
       - run: npm run build
       - run: npm test
 
-      - name: Publish
-        # Trusted publishing (OIDC): no NPM_TOKEN needed. Configure once at
-        # npmjs.com → package Settings → Trusted Publisher → GitHub Actions
-        # (org fiale-plus, repo jev-cli, workflow npm-publish.yml).
-        run: npm publish --provenance --access public
+      - name: Stage on npm
+        # Provenance attestations are generated automatically for trusted
+        # publishers; --access public keeps the scoped package readable.
+        run: npm stage publish --access public
 
-      - name: Verify publication
+      - name: Report what to approve
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sleep 10
-          npm view @fiale-plus/jev-cli@"$VERSION"
+          VERSION="$(node -p "require('./package.json').version")"
+          npm stage list @fiale-plus/jev-cli || true
+          {
+            echo "### Staged @fiale-plus/jev-cli@$VERSION"
+            echo
+            echo "Approve with 2FA to move it to prod:"
+            echo
+            echo '```'
+            echo "npm stage approve <stage-id>"
+            echo '```'
+            echo
+            echo "Or use the Staged Packages tab on npmjs.com."
+          } >> "$GITHUB_STEP_SUMMARY"
