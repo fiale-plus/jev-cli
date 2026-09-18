@@ -6,7 +6,7 @@ export type { LintIssue, LintResult } from "./cli/lint.js";
 // thresholds on their own records needs the same decision function the CLI uses.
 export { lintPolicy, coercePolicy, evaluatePolicy, policyHash, GATE_EXIT } from "./cli/policy.js";
 export type { GateDecision, GatePolicy, GateResult, GateRule, RuleOutcome } from "./cli/policy.js";
-export { buildRecord, extractResponse, isRecord, recordCost, RECORD_VERSION } from "./cli/records.js";
+export { buildRecord, extractResponse, isRecord, readRecord, recordCost, RECORD_VERSION } from "./cli/records.js";
 export type { DecisionRecord, RecordPackRef } from "./cli/records.js";
 export { listPacks, loadPack } from "./commands/packs.js";
 export type { Pack } from "./commands/packs.js";

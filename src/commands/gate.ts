@@ -3,7 +3,7 @@ import type { OutputFormat } from "../cli/formatters.js";
 import { formatGate } from "../cli/formatters.js";
 import type { GatePolicy } from "../cli/policy.js";
 import { GATE_EXIT, coercePolicy, evaluatePolicy } from "../cli/policy.js";
-import { coerceRecord, extractResponse, isRecord } from "../cli/records.js";
+import { extractResponse, isRecord, readRecord } from "../cli/records.js";
 import { loadPack } from "./packs.js";
 import { hashValue } from "../utils/hash.js";
 import { readJsonFile } from "../utils/io.js";
@@ -54,7 +54,7 @@ export async function handleGate(global: GlobalOptions, format: OutputFormat): P
   const { policy, pack, questionsHash, source } = resolvePolicy(global);
 
   const input = readJsonFile(global.input);
-  const record = isRecord(input) ? coerceRecord(input) : null;
+  const record = isRecord(input) ? readRecord(input) : null;
   const response = record !== null ? record.response : extractResponse(input);
 
   // Gating a record against the pack that produced it: if the questions changed,

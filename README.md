@@ -289,15 +289,40 @@ console.log(response.usage);             // { input_tokens, output_tokens }
 The package re-exports the official SDK client, builders, and error types, plus the offline decision layer:
 
 ```typescript
-import { evaluatePolicy, extractResponse, loadPack, buildRecord } from "@fiale-plus/jev-cli";
+import { TypeSafeClient, choice, noul } from "@fiale-plus/jev-cli";
 
-const { pack, hash } = loadPack("verify");
-const response = await jev.systemOne({ state: claim, questions: pack.questions });
-const result = evaluatePolicy(pack.policy, response);
+const client = new TypeSafeClient({ apiKey: process.env.TYPESAFE_API_KEY! });
+const response = await client.systemOne({
+  state: "Payouts failing 3 days, help!",
+  questions: {
+    is_urgent: noul("Does this convey urgency?"),
+    dept: choice("Which team handles this?", { billing: "Payments", technical: "Bugs" }),
+  },
+});
+console.log(response.answers.is_urgent); // { type: "noul", noul: 0.98 }
+console.log(response.usage);             // { input_tokens, output_tokens }
+```
+
+Reuse one client across calls, own your state and elapsed time, and never apply a policy to a failed request:
+
+```typescript
+import { evaluatePolicy, loadPack, readRecord, buildRecord } from "@fiale-plus/jev-cli";
+
+const { pack } = loadPack("verify");
+const started = Date.now();
+const response = await client.systemOne({ state: claim, questions: pack.questions });
+const record = buildRecord({ pack: null, modelRequested: undefined, state: claim, questions: pack.questions, latencyMs: Date.now() - started }, response);
+```
+
+`readRecord` is the validated boundary for stored records — it returns a checked `DecisionRecord` or throws — while `isRecord` only detects the envelope. `extractResponse` accepts either a bare response or a decision record, so gating code does not care which one it was handed:
+
+```typescript
+const stored = readRecord(JSON.parse(savedText));
+const result = evaluatePolicy(pack.policy, stored.response);
 if (result.decision !== "accept") process.exit(result.exit_code);
 ```
 
-`GATE_EXIT` maps a decision to its exit code; `extractResponse` accepts either a bare response or a decision record, so gating code does not care which one it was handed.
+A complete runnable version lives at `examples/library/record-and-gate.mts`. `GATE_EXIT` maps a decision to its exit code.
 
 ## Development
 
