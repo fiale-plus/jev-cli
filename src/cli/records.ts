@@ -69,10 +69,10 @@ export function recordCost(record: DecisionRecord): { input_tokens: number; outp
   };
 }
 
-// Envelope detector. Anything carrying record fields is treated as a record and
-// must validate as one: falling back to a bare response would let a malformed or
-// newer record be reinterpreted as a different judgment.
-export function isRecord(input: unknown): input is DecisionRecord {
+// Envelope detector. Anything carrying record fields is treated as a candidate
+// record and must validate as one: falling back to a bare response would let a
+// malformed or newer record be reinterpreted as a different judgment.
+export function isRecord(input: unknown): boolean {
   return (
     typeof input === "object" &&
     input !== null &&
@@ -87,7 +87,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 // Validates the fields that gate and replay dereference, so a hand-edited or
 // truncated record fails with a message instead of a TypeError.
-export function coerceRecord(input: unknown): DecisionRecord {
+function coerceRecord(input: unknown): DecisionRecord {
   if (!isObject(input)) throw new Error("Invalid record: expected a JSON object.");
   if (input.record_version !== RECORD_VERSION) {
     throw new Error(`Unsupported record_version ${JSON.stringify(input.record_version ?? null)}: this CLI writes version ${RECORD_VERSION}.`);
@@ -105,10 +105,19 @@ export function coerceRecord(input: unknown): DecisionRecord {
   return input as unknown as DecisionRecord;
 }
 
+// Public boundary for stored records: returns a validated record or throws. Unlike
+// isRecord, this is a claim the caller can rely on — a malformed envelope fails
+// here instead of reaching response handling unvalidated.
+export function readRecord(input: unknown): DecisionRecord {
+  if (!isRecord(input)) throw new Error('Invalid record: expected a decision record with a "record_version" or "response" field.');
+  return coerceRecord(input);
+}
+
+
 // Accepts either a record or a bare response object, so `gate` can read the output
 // of `ask` directly as well as a saved record.
 export function extractResponse(input: unknown): SystemOneResult<Questions> {
-  if (isRecord(input)) return coerceRecord(input).response;
+  if (isRecord(input)) return readRecord(input).response;
   if (isObject(input) && "answers" in input) return input as unknown as SystemOneResult<Questions>;
   throw new Error('Invalid input: expected a response object with an "answers" map, or a decision record with a "response" field.');
 }

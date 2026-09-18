@@ -104,3 +104,22 @@ npx tsx src/cli.ts packs verify | jq '.policy' > my-policy.json
 
 Keep the questions and the policy in step: change a question ID and the rules that
 name it abstain (exit 4), which is loud, not silent.
+
+## library — caller-owned recorded workflow
+
+`library/record-and-gate.mts` runs the full workflow with public imports only:
+one shared SDK client, abort on SIGINT/SIGTERM, elapsed-time measurement, error
+handling that never applies policy to a failed request, then offline policy over
+the saved record.
+
+```bash
+node tools/stub-server.mjs &
+export TYPESAFE_BASE_URL=http://127.0.0.1:8787 TYPESAFE_API_KEY=stub
+mkdir -p out
+npx tsx examples/library/record-and-gate.mts out/library-record.json; echo "exit $?"
+npx tsx src/cli.ts replay --record out/library-record.json
+```
+
+The record stores hashes of the supplied state and questions, model identity and
+latency — never the supplied text. Keep the original evidence and its stable ID
+outside version control if it is private.

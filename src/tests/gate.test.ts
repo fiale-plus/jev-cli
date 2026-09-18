@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { Questions, SystemOneResult } from "@typesafe-ai/sdk";
 import { GATE_EXIT, coercePolicy, evaluatePolicy, lintPolicy, policyHash } from "../cli/policy.js";
 import type { GatePolicy } from "../cli/policy.js";
-import { buildRecord, extractResponse, isRecord } from "../cli/records.js";
+import { buildRecord, extractResponse, isRecord, readRecord } from "../cli/records.js";
 import { canonicalJson, hashValue } from "../utils/hash.js";
 import { cliVersion } from "../utils/package.js";
 import { listPacks, loadPack } from "../commands/packs.js";
@@ -294,6 +294,20 @@ describe("records", () => {
     const build = (state: unknown) => buildRecord({ pack: null, modelRequested: undefined, state, questions: {} as Questions, latencyMs: 1 }, MIXED_RESPONSE).state_sha256;
     const hashes = [build('{"a":1}'), build({ a: 1 }), build("123"), build(123), build(null), build(undefined)];
     assert.equal(new Set(hashes).size, hashes.length, `state hashes must be distinct per input: ${JSON.stringify(hashes)}`);
+  });
+
+  it("detects record envelopes without claiming them valid", () => {
+    assert.equal(isRecord({ response: null }), true);
+    assert.throws(() => readRecord({ response: null }), /Unsupported record_version/);
+    assert.throws(() => readRecord({ nope: true }), /Invalid record/);
+  });
+
+  it("validates stored records through the advertised boundary", () => {
+    const record = buildRecord(
+      { pack: null, modelRequested: undefined, state: "claim text", questions: {} as Questions, latencyMs: 1 },
+      MIXED_RESPONSE,
+    );
+    assert.deepEqual(readRecord(record), record);
   });
 
   it("rejects a record envelope that is malformed or from another version", () => {
