@@ -5,7 +5,7 @@ export interface GlobalOptions {
   model?: string;
   baseUrl?: string;
   logLevel?: string;
-  format: "json" | "table";
+  format: "json" | "table" | "decision";
   request?: string;
   state?: string;
   stateFile?: string;
@@ -20,9 +20,14 @@ export interface GlobalOptions {
   retries?: string;
   concurrency?: string;
   pack?: string;
+  packFile?: string;
   policy?: string;
   input?: string;
   record?: string;
+  recordJsonl?: string;
+  runId?: string;
+  decisionId?: string;
+  parentId?: string;
   live: boolean;
   help: boolean;
   version: boolean;
@@ -48,13 +53,19 @@ const OPTIONS = {
   retries: { type: "string" as const },
   concurrency: { type: "string" as const },
   pack: { type: "string" as const },
+  "pack-file": { type: "string" as const },
   policy: { type: "string" as const },
   input: { type: "string" as const },
   record: { type: "string" as const },
+  "record-jsonl": { type: "string" as const },
+  "run-id": { type: "string" as const },
+  "decision-id": { type: "string" as const },
+  "parent-id": { type: "string" as const },
   live: { type: "boolean" as const, default: false },
   help: { type: "boolean" as const, default: false },
   version: { type: "boolean" as const, default: false },
 };
+
 
 export function parseGlobal(argv: string[]) {
   return parseArgs({ args: argv, options: OPTIONS, strict: true, allowPositionals: true });
@@ -62,8 +73,8 @@ export function parseGlobal(argv: string[]) {
 
 export function extractGlobalOpts(values: Record<string, unknown>): GlobalOptions {
   const format = (values.format as string) || "json";
-  if (format !== "json" && format !== "table") {
-    throw new Error(`Invalid --format: "${format}". Expected json|table.`);
+  if (format !== "json" && format !== "table" && format !== "decision") {
+    throw new Error(`Invalid --format: "${format}". Expected json|table|decision.`);
   }
   const stateFormat = (values["state-format"] as string) || "text";
   if (stateFormat !== "text" && stateFormat !== "json") {
@@ -79,7 +90,7 @@ export function extractGlobalOpts(values: Record<string, unknown>): GlobalOption
     model: values.model as string | undefined,
     baseUrl: values["base-url"] as string | undefined,
     logLevel,
-    format: format as "json" | "table",
+    format: format as "json" | "table" | "decision",
     request: values.request as string | undefined,
     state: values.state as string | undefined,
     stateFile: values["state-file"] as string | undefined,
@@ -94,9 +105,14 @@ export function extractGlobalOpts(values: Record<string, unknown>): GlobalOption
     retries: values.retries as string | undefined,
     concurrency: values.concurrency as string | undefined,
     pack: values.pack as string | undefined,
+    packFile: values["pack-file"] as string | undefined,
     policy: values.policy as string | undefined,
     input: values.input as string | undefined,
     record: values.record as string | undefined,
+    recordJsonl: values["record-jsonl"] as string | undefined,
+    runId: values["run-id"] as string | undefined,
+    decisionId: values["decision-id"] as string | undefined,
+    parentId: values["parent-id"] as string | undefined,
     live: (values.live as boolean) || false,
     help: (values.help as boolean) || false,
     version: (values.version as boolean) || false,

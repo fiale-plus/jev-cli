@@ -11,7 +11,7 @@ import { readJsonFile, readState } from "../utils/io.js";
 import { coerceQuestions } from "../cli/lint.js";
 import type { RecordPackRef } from "../cli/records.js";
 import { buildRecord, writeRecord } from "../cli/records.js";
-import { loadPack } from "./packs.js";
+import { loadPack, loadPackFile } from "./packs.js";
 
 export function clientOpts(global: GlobalOptions, apiKey: string): ClientOpts {
   return {
@@ -32,16 +32,17 @@ interface EmitOptions {
   questions: Questions;
   model: string | undefined;
   format: OutputFormat;
-  /** Pack revision this call used, when the questions came from a pack. */
   pack: RecordPackRef | null;
-  /** --record <path>: write a decision record alongside the printed response. */
   recordPath: string | undefined;
+  runId?: string;
+  decisionId?: string;
+  parentId?: string;
   signal?: AbortSignal;
 }
 
 // Successful inference always exits 0. Confidence is data, not authorization:
 // callers decide which answers matter and apply their own policy.
-async function emit({ opts, state, questions, model, format, pack, recordPath, signal }: EmitOptions): Promise<void> {
+async function emit({ opts, state, questions, model, format, pack, recordPath, runId, decisionId, parentId, signal }: EmitOptions): Promise<void> {
   if (recordPath !== undefined) {
     // Prepared before the request: a bad record path must fail before paying for
     // an answer that would then have nowhere to go.
@@ -60,11 +61,10 @@ async function emit({ opts, state, questions, model, format, pack, recordPath, s
     { ...(signal !== undefined ? { signal } : {}) },
   );
   const latencyMs = Date.now() - started;
-
   if (recordPath !== undefined) {
-    const record = buildRecord({ pack, modelRequested: model, state, questions, latencyMs }, response);
+    const record = buildRecord({ runId, decisionId, parentId, pack, modelRequested: model, state, questions, latencyMs }, response);
     writeRecord(recordPath, record);
-    process.stderr.write(`record written: ${recordPath}\n`);
+    process.stderr.write(`record written: ${recordPath} (${record.decision_id ?? "un-correlated"})\n`);
   }
 
   // Broken pipe surfaces via the process error handler; stdout stays the only
@@ -94,11 +94,9 @@ function stateSource(global: GlobalOptions) {
   return { state: global.state, stateFile: global.stateFile, stateFormat: global.stateFormat, stdin: global.stdin };
 }
 
-// --pack applies to `ask`, where the caller brings their own state. The single-question
-// commands build their questions from flags, so a pack there would be unreachable.
 function rejectPack(global: GlobalOptions, command: string): void {
-  if (global.pack !== undefined) {
-    throw new Error(`Conflicting inputs: --pack applies to "ask" (state plus pack questions), not "${command}".`);
+  if (global.pack !== undefined || global.packFile !== undefined) {
+    throw new Error(`Conflicting inputs: --pack/--pack-file applies to "ask" (state plus pack questions), not "${command}".`);
   }
 }
 
@@ -117,7 +115,7 @@ export async function handleNoul(positionals: string[], global: GlobalOptions, o
     model: global.model,
     format,
     pack: null,
-    recordPath: global.record,
+    recordPath: global.record, runId: global.runId, decisionId: global.decisionId, parentId: global.parentId,
     signal: abortSignal(),
   });
 }
@@ -143,7 +141,7 @@ export async function handleChoice(positionals: string[], global: GlobalOptions,
     model: global.model,
     format,
     pack: null,
-    recordPath: global.record,
+    recordPath: global.record, runId: global.runId, decisionId: global.decisionId, parentId: global.parentId,
     signal: abortSignal(),
   });
 }
@@ -163,18 +161,23 @@ export async function handleScore(positionals: string[], global: GlobalOptions, 
     model: global.model,
     format,
     pack: null,
-    recordPath: global.record,
+    recordPath: global.record, runId: global.runId, decisionId: global.decisionId, parentId: global.parentId,
     signal: abortSignal(),
   });
 }
 
 export async function handleAsk(global: GlobalOptions, opts: ClientOpts, format: OutputFormat): Promise<void> {
   const hasStateFlags = global.state !== undefined || global.stateFile !== undefined || global.stdin;
-  // Full request file: {state, model?, questions} — mirrors the API shape.
-  // --request is mutually exclusive with --state/--state-file/--stdin/--model/--questions.
+  const packSource = global.pack !== undefined ? loadPack(global.pack) : global.packFile !== undefined ? loadPackFile(global.packFile) : null;
+  if (packSource !== null) {
+    if (global.questions !== undefined) throw new Error("Conflicting inputs: a pack and --questions both supply questions. Use one.");
+    const state = await readState({ ...stateSource(global), extra: [] });
+    await emit({ opts, state, questions: packSource.pack.questions, model: global.model, format, pack: { name: packSource.pack.name, pack_version: packSource.pack.pack_version, hash: packSource.hash }, recordPath: global.record, runId: global.runId, decisionId: global.decisionId, parentId: global.parentId, signal: abortSignal() });
+    return;
+  }
   if (global.request) {
-    if (hasStateFlags || global.model !== undefined || global.questions !== undefined || global.pack !== undefined) {
-      throw new Error("Conflicting inputs: --request is mutually exclusive with --state, --state-file, --stdin, --model, --questions, and --pack. Put state/model/questions in the request file.");
+    if (hasStateFlags || global.model !== undefined || global.questions !== undefined || global.pack !== undefined || global.packFile !== undefined) {
+      throw new Error("Conflicting inputs: --request is mutually exclusive with state, model, questions, and pack options. Put them in the request file.");
     }
     const raw = readJsonFile(global.request) as { state?: unknown; model?: string; questions?: unknown };
     if (typeof raw !== "object" || raw === null || raw.state === undefined || raw.questions === undefined) {
@@ -182,34 +185,15 @@ export async function handleAsk(global: GlobalOptions, opts: ClientOpts, format:
     }
     const questions = coerceQuestions(raw.questions);
     const model = typeof raw.model === "string" ? raw.model : undefined;
-    await emit({ opts, state: raw.state, questions, model, format, pack: null, recordPath: global.record, signal: abortSignal() });
+    await emit({ opts, state: raw.state, questions, model, format, pack: null, recordPath: global.record, runId: global.runId, decisionId: global.decisionId, parentId: global.parentId, signal: abortSignal() });
     return;
   }
 
-  // Pack mode: questions from the bundled pack, state from the caller.
-  if (global.pack !== undefined) {
-    if (global.questions !== undefined) {
-      throw new Error("Conflicting inputs: --pack and --questions both supply questions. Use one.");
-    }
-    const loaded = loadPack(global.pack);
-    const state = await readState({ ...stateSource(global), extra: [] });
-    await emit({
-      opts,
-      state,
-      questions: loaded.pack.questions,
-      model: global.model,
-      format,
-      pack: { name: loaded.pack.name, pack_version: loaded.pack.pack_version, hash: loaded.hash },
-      recordPath: global.record,
-      signal: abortSignal(),
-    });
-    return;
-  }
 
   if (!global.questions) {
-    throw new Error("Missing questions: jev ask --request <file> | --questions <file> --state ... | --pack <name> --state ... .");
+    throw new Error("Missing questions: jev ask --request <file> | --questions <file> --state ... | --pack/--pack-file <path> --state ... .");
   }
   const questions = coerceQuestions(readJsonFile(global.questions));
   const state = await readState({ ...stateSource(global), extra: [] });
-  await emit({ opts, state, questions, model: global.model, format, pack: null, recordPath: global.record, signal: abortSignal() });
+  await emit({ opts, state, questions, model: global.model, format, pack: null, recordPath: global.record, runId: global.runId, decisionId: global.decisionId, parentId: global.parentId, signal: abortSignal() });
 }

@@ -36,14 +36,25 @@ Requires Node.js >= 22.0.0.
 
 ## The decision pipeline
 
-Inference and policy are separate steps, so a judgment is reproducible and auditable:
+Inference and policy remain separate primitives. `decide` composes them when a caller wants one request, one inspectable envelope, and the existing gate exit codes:
+
+```bash
+jev decide --pack verify --state-file claim.json --state-format json --record decisions/claim-1.json
+jev decide --pack-file .jev/claim-pack.json --state-file claim.json --format decision
+```
+
+JSON output distinguishes `response`, `gate`, `provenance`, and correlation IDs. `--format decision` prints only `accept`, `review`, `deny`, or `abstain`; diagnostics remain on stderr. `decide` never executes a follow-up command. `ask` and `gate` remain independently usable.
+
+`--pack-file` loads one project-owned pack at the exact path supplied. It uses the same question/policy validation and content hash as bundled packs; there is no registry or implicit search.
+
+For the lower-level workflow:
 
 ```bash
 # 1. Judge — questions from a bundled pack, state from you, record for the audit trail
 jev ask --pack verify --state-file claim.json --state-format json --record decisions/claim-1.json
 
 # 2. Decide — offline, no API call, exit code is the decision
-jev gate --input decisions/claim-1.json --pack verify; echo "exit $?"    # 0 2 3 4
+jev gate --input decisions/claim-1.json --pack verify; echo "exit $?"
 
 # 3. Show your work — re-emit the stored answers without paying again
 jev replay --record decisions/claim-1.json

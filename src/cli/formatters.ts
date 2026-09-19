@@ -3,7 +3,7 @@ import { estimateCostUsd } from "../api/client.js";
 import type { DecisionRecord } from "./records.js";
 import type { GateResult } from "./policy.js";
 
-export type OutputFormat = "json" | "table";
+export type OutputFormat = "json" | "table" | "decision";
 
 export interface DoctorCheck {
   name: string;
@@ -99,6 +99,7 @@ function formatTable(response: SystemOneResult<Questions>): string {
 }
 
 export function formatGate(result: GateResult, provenance: GateProvenance, format: OutputFormat): string {
+  if (format === "decision") return result.decision;
   if (format === "json") return JSON.stringify({ gate: result, provenance }, null, 2);
   const lines = [
     `decision: ${result.decision} (exit ${result.exit_code})`,
