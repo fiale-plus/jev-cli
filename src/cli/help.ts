@@ -8,7 +8,7 @@ COMMANDS
   choice <instructions>            Pick one option (--option name="desc" ×2+)
   score <instructions>             Rate along levels (--level "desc" ×2+, lowest first)
   ask                              Batch questions over one state in a single call
-  batch                            Many requests from a JSONL file, bounded concurrency
+  decide                           Judge and apply a pack policy in one call
   gate                             Apply a policy to a saved judgment — no API call
   replay                           Re-emit a stored record — no API call
   packs                            List the bundled question packs
@@ -26,9 +26,12 @@ STATE (noul/choice/score/ask)
 REQUEST FILE (ask)
   --request <path>                 Full request {"state","questions","model?"}
   --questions <file>               Questions map (with --state/--state-file/--stdin)
-  --pack <name>                    Bundled questions (jev packs) — "verify", "screen", "route"
+  --pack <name>                    Bundled questions/policy pack
+  --pack-file <path>               Project-owned questions/policy pack
   --record <path>                  Write a decision record (state hashed, not stored)
-
+  --run-id <id>                    Correlate related operations
+  --decision-id <id>               Set the decision correlation ID
+  --parent-id <id>                 Link this decision to a parent operation
 EXIT CODES (execution status)
   0  success — inference completed, answers on stdout
   1  usage, transport, or API error
@@ -74,6 +77,16 @@ DOCS
 DISCLAIMER
   Unofficial, community-maintained. Not affiliated with TypeSafe.
   Typed output guarantees the interface, not the truth — validate on your data.
+`;
+export const DECIDE_HELP = `jev decide — Run inference and policy together
+
+USAGE
+  jev decide --pack <name> --state-file <path> [--record <path>]
+  jev decide --pack-file <path> --state-file <path> [--format decision]
+
+The policy is explicit in the selected pack. JSON output separates response,
+gate result, provenance, and correlation IDs. Exit codes are accept 0,
+review 2, deny 3, abstain 4; execution failures remain 1.
 `;
 
 export const ASK_HELP = `jev ask — Questions over one state in a single call
@@ -124,11 +137,9 @@ USAGE
   jev models
 
 NOTE
-  The list carries aliases. Versioned IDs (e.g. jev-1.13.0) are accepted by
-  the model field whether or not they appear in the list. The response "model"
-  field reports the versioned ID that answered — log it.
+  The list carries aliases. Versioned IDs are accepted by the model field; the
+  response model field reports the versioned ID that answered — log it.
 `;
-
 export const GATE_HELP = `jev gate — Apply a policy to a saved judgment (no API call)
 
 USAGE

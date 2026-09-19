@@ -1,4 +1,5 @@
-import { writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, writeFileSync } from "node:fs";
 import type { Questions, SystemOneResult } from "@typesafe-ai/sdk";
 import { estimateCostUsd } from "../api/client.js";
 import { hashValue, sha256Hex } from "../utils/hash.js";
@@ -16,6 +17,9 @@ export interface RecordPackRef {
 // confidential text, and the hash is enough to commit to which input was judged.
 export interface DecisionRecord {
   record_version: number;
+  run_id?: string;
+  decision_id?: string;
+  parent_id?: string | null;
   created_at: string;
   cli_version: string;
   pack: RecordPackRef | null;
@@ -28,6 +32,9 @@ export interface DecisionRecord {
 }
 
 export interface RecordInputs {
+  runId?: string;
+  decisionId?: string;
+  parentId?: string;
   pack: RecordPackRef | null;
   modelRequested: string | undefined;
   state: unknown;
@@ -45,6 +52,9 @@ function stateHash(state: unknown): string | null {
 export function buildRecord(inputs: RecordInputs, response: SystemOneResult<Questions>): DecisionRecord {
   return {
     record_version: RECORD_VERSION,
+    run_id: inputs.runId ?? randomUUID(),
+    decision_id: inputs.decisionId ?? randomUUID(),
+    parent_id: inputs.parentId ?? null,
     created_at: new Date().toISOString(),
     cli_version: cliVersion(),
     pack: inputs.pack,
@@ -59,6 +69,9 @@ export function buildRecord(inputs: RecordInputs, response: SystemOneResult<Ques
 
 export function writeRecord(path: string, record: DecisionRecord): void {
   writeFileSync(path, JSON.stringify(record, null, 2) + "\n", "utf8");
+}
+export function appendRecordJsonl(path: string, record: DecisionRecord): void {
+  appendFileSync(path, JSON.stringify(record) + "\n", "utf8");
 }
 
 export function recordCost(record: DecisionRecord): { input_tokens: number; output_tokens: number; estimated_usd: number } {

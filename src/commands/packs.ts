@@ -43,6 +43,35 @@ export function packNames(): string[] {
   }
 }
 
+function validateRawPack(raw: unknown, expectedName?: string): Pack {
+  const label = expectedName ?? "file";
+  if (typeof raw !== "object" || raw === null) throw new Error(`Invalid pack "${label}": expected a JSON object.`);
+  const record = raw as Record<string, unknown>;
+  if (record.pack_version !== 1) throw new Error(`Invalid pack "${label}": pack_version must be 1.`);
+  if (typeof record.name !== "string") {
+    throw new Error(`Invalid pack "${label}": name is required.`);
+  }
+  if (expectedName !== undefined && record.name !== expectedName) {
+    throw new Error(`Invalid pack "${expectedName}": name must match the file name.`);
+  }
+  if (typeof record.description !== "string" || record.description.trim().length === 0) {
+    throw new Error(`Invalid pack "${label}": description is required.`);
+  }
+
+  const questionsLint = lintQuestions(record.questions);
+  if (!questionsLint.ok) {
+    const first = questionsLint.issues.find((i) => i.severity === "error");
+    throw new Error(`Invalid pack "${label}": questions ${first?.qid ? `(${first.qid}) ` : ""}[${first?.code}]: ${first?.message}`);
+  }
+  const policy = coercePolicy(record.policy);
+  return record as unknown as Pack;
+}
+
+function loadedPack(pack: Pack, path: string): LoadedPack {
+  const policy = coercePolicy(pack.policy);
+  return { pack, hash: `sha256:${hashValue({ questions: pack.questions, policy })}`, path };
+}
+
 export function loadPack(name: string): LoadedPack {
   const path = packFile(name);
   let raw: unknown;
@@ -54,25 +83,18 @@ export function loadPack(name: string): LoadedPack {
       `Unknown pack "${name}" (${err instanceof Error ? err.message : String(err)}). Available: ${available.length > 0 ? available.join(", ") : "none"}.`,
     );
   }
-  if (typeof raw !== "object" || raw === null) throw new Error(`Invalid pack "${name}": expected a JSON object.`);
-  const record = raw as Record<string, unknown>;
-  if (record.pack_version !== 1) throw new Error(`Invalid pack "${name}": pack_version must be 1.`);
-  if (typeof record.name !== "string" || record.name !== name) {
-    throw new Error(`Invalid pack "${name}": name must match the file name.`);
-  }
-  if (typeof record.description !== "string" || record.description.trim().length === 0) {
-    throw new Error(`Invalid pack "${name}": description is required.`);
-  }
+  return loadedPack(validateRawPack(raw, name), path);
+}
 
-  const questionsLint = lintQuestions(record.questions);
-  if (!questionsLint.ok) {
-    const first = questionsLint.issues.find((i) => i.severity === "error");
-    throw new Error(`Invalid pack "${name}": questions ${first?.qid ? `(${first.qid}) ` : ""}[${first?.code}]: ${first?.message}`);
+/** Load and validate a pack from exactly the supplied JSON file path. */
+export function loadPackFile(path: string): LoadedPack {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (err) {
+    throw new Error(`Unable to load pack file "${path}": ${err instanceof Error ? err.message : String(err)}.`);
   }
-  const policy = coercePolicy(record.policy);
-
-  const pack = record as unknown as Pack;
-  return { pack, hash: `sha256:${hashValue({ questions: pack.questions, policy })}`, path };
+  return loadedPack(validateRawPack(raw), path);
 }
 
 export function listPacks(): Array<{ name: string; pack_version: number; description: string; hash: string; ruleCount: number; questionCount: number }> {

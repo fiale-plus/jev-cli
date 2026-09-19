@@ -4,7 +4,7 @@ import { APIError, TypeSafeError } from "@typesafe-ai/sdk";
 import { parseGlobal, extractGlobalOpts } from "./cli/parseArgs.js";
 import type { OutputFormat } from "./cli/formatters.js";
 import { formatJsonError } from "./cli/formatters.js";
-import { ASK_HELP, BATCH_HELP, DOCTOR_HELP, GATE_HELP, MAIN_HELP, MODELS_HELP, PACKS_HELP, REPLAY_HELP } from "./cli/help.js";
+import { ASK_HELP, BATCH_HELP, DECIDE_HELP, DOCTOR_HELP, GATE_HELP, MAIN_HELP, MODELS_HELP, PACKS_HELP, REPLAY_HELP } from "./cli/help.js";
 import { resolveApiKey } from "./utils/validation.js";
 import { cliVersion } from "./utils/package.js";
 import { handleBatch, handleLint, handleModels } from "./commands/ops.js";
@@ -12,19 +12,20 @@ import type { ClientOpts } from "./api/client.js";
 import { clientOpts, handleAsk, handleChoice, handleNoul, handleScore } from "./commands/requests.js";
 import { handleGate } from "./commands/gate.js";
 import { handleReplay } from "./commands/replay.js";
-import { handlePacks } from "./commands/packs.js";
 import { handleDoctor } from "./commands/doctor.js";
+import { handlePacks } from "./commands/packs.js";
+import { handleDecide } from "./commands/decide.js";
 
 const HELP_BY_COMMAND: Record<string, string> = {
   ask: ASK_HELP,
   batch: BATCH_HELP,
+  decide: DECIDE_HELP,
   models: MODELS_HELP,
   gate: GATE_HELP,
   replay: REPLAY_HELP,
   packs: PACKS_HELP,
   doctor: DOCTOR_HELP,
 };
-
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
@@ -59,8 +60,11 @@ async function main(): Promise<void> {
       await handleLint(global);
       return;
 
-    // Offline commands: no API key required, so policies and records can be
-    // evaluated in CI and in environments that must not hold a key.
+    case "decide": {
+      const opts = clientOpts(global, resolveApiKey(global.apiKey));
+      await handleDecide(global, opts, format);
+      return;
+    }
     case "gate":
       await handleGate(global, format);
       return;

@@ -4,9 +4,9 @@ import { formatGate } from "../cli/formatters.js";
 import type { GatePolicy } from "../cli/policy.js";
 import { GATE_EXIT, coercePolicy, evaluatePolicy } from "../cli/policy.js";
 import { extractResponse, isRecord, readRecord } from "../cli/records.js";
-import { loadPack } from "./packs.js";
-import { hashValue } from "../utils/hash.js";
+import { loadPack, loadPackFile } from "./packs.js";
 import { readJsonFile } from "../utils/io.js";
+import { hashValue } from "../utils/hash.js";
 
 export interface ResolvedPolicy {
   policy: GatePolicy;
@@ -19,23 +19,16 @@ export interface ResolvedPolicy {
 // Exactly one policy source. A pack carries its own policy, so `--pack verify` is
 // enough; `--policy file.json` is for policies tuned on your own data.
 export function resolvePolicy(global: GlobalOptions): ResolvedPolicy {
-  if (global.policy !== undefined && global.pack !== undefined) {
-    throw new Error("Conflicting inputs: --policy and --pack are mutually exclusive.");
-  }
-  if (global.pack !== undefined) {
-    const loaded = loadPack(global.pack);
-    return {
-      policy: loaded.pack.policy,
-      pack: { name: loaded.pack.name, pack_version: loaded.pack.pack_version, hash: loaded.hash },
-      questionsHash: `sha256:${hashValue(loaded.pack.questions)}`,
-      source: loaded.path,
-    };
+  if (global.policy !== undefined && (global.pack !== undefined || global.packFile !== undefined)) throw new Error("Conflicting inputs: --policy and pack options are mutually exclusive.");
+  if (global.pack !== undefined || global.packFile !== undefined) {
+    const loaded = global.pack !== undefined ? loadPack(global.pack) : loadPackFile(global.packFile as string);
+    return { policy: loaded.pack.policy, pack: { name: loaded.pack.name, pack_version: loaded.pack.pack_version, hash: loaded.hash }, questionsHash: `sha256:${hashValue(loaded.pack.questions)}`, source: loaded.path };
   }
   if (global.policy !== undefined) {
     const policy = coercePolicy(readRecordOrJson(global.policy));
     return { policy, pack: null, questionsHash: null, source: global.policy };
   }
-  throw new Error("Missing policy: pass --pack <name> or --policy <file>. Run `jev packs` to list packs.");
+  throw new Error("Missing policy: pass --pack, --pack-file, or --policy. Run `jev packs` to list bundled packs.");
 }
 
 // A policy file may hold the policy itself or an object with a "policy" field.

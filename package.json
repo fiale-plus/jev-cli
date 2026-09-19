@@ -16,7 +16,7 @@
     "dist/",
     "packs/",
     "examples/",
-    "README.md",
+    "tools/",
     "LICENSE"
   ],
   "keywords": [
@@ -52,7 +52,7 @@
   },
   "type": "module",
   "types": "dist/index.d.ts",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
   }

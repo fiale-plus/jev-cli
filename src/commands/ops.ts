@@ -34,8 +34,8 @@ export async function handleBatch(global: GlobalOptions, opts: ClientOpts, forma
   if (concurrency < 1) throw new Error(`Invalid --concurrency: "${global.concurrency}". Expected an integer in [1, 32].`);
   const signal = abortSignal();
   const client = createClient(opts);
-
   const inFlight = new Map<number, Promise<SettledRow>>();
+
   const buffered = new Map<number, SettledRow>();
   let nextIndex = 0;
   let failures = 0;
